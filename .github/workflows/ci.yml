@@ -220,10 +220,15 @@ jobs:
       - name: Verify final image contains only the tissue binary
         run: |
           set -eu
-          docker create --name inspect tissue:poc >/dev/null
-          docker export inspect | tar -tv | awk '{print $NF}' | sed 's|^\./|/|; s|^\.|/|' | sort -u > /tmp/entries.txt
-          docker rm inspect >/dev/null
-          bad="$(grep -v -e '^/$' -e '^/tissue$' -e '^$' /tmp/entries.txt || true)"
+          # Inspect the image itself (docker save -> layer tars), not a
+          # container: docker export includes runtime device files.
+          docker save tissue:poc -o /tmp/img.tar
+          mkdir -p /tmp/img && tar -xf /tmp/img.tar -C /tmp/img
+          find /tmp/img -name layer.tar -print0 |
+            while IFS= read -r -d '' layer; do
+              tar -tvf "$layer" | awk '{print $NF}'
+            done | sed 's|^\./||' | sort -u > /tmp/entries.txt
+          bad="$(grep -v -e '^tissue$' -e '^/$' -e '^$' /tmp/entries.txt || true)"
           if [ -n "$bad" ]; then
             echo "::error::Unexpected files in final image:"
             echo "$bad"
