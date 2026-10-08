@@ -16,6 +16,10 @@ jobs:
   rust:
     name: fmt / check / clippy / test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: src
     steps:
       - uses: actions/checkout@v4
 
@@ -27,50 +31,59 @@ jobs:
         with:
           workspaces: src
 
-      - name: Ensure workspace root exists
-        run: mkdir -p src
-
-      - name: Locate workspace manifest
-        id: workspace
-        run: |
-          if [ -f src/Cargo.toml ]; then
-            echo "root=src" >> "$GITHUB_OUTPUT"
-          else
-            echo "root=" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Install toolchain components for workspace
-        if: steps.workspace.outputs.root != ''
-        run: rustup component add rustfmt clippy
-
       - name: cargo fmt --check
-        if: steps.workspace.outputs.root != ''
-        working-directory: ${{ steps.workspace.outputs.root }}
         run: cargo fmt --all --check
 
       - name: cargo check
-        if: steps.workspace.outputs.root != ''
-        working-directory: ${{ steps.workspace.outputs.root }}
         run: cargo check --workspace --all-targets
 
       - name: cargo clippy
-        if: steps.workspace.outputs.root != ''
-        working-directory: ${{ steps.workspace.outputs.root }}
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: cargo test
-        if: steps.workspace.outputs.root != ''
-        working-directory: ${{ steps.workspace.outputs.root }}
         run: cargo test --workspace
 
-      - name: Skip notice (pre-scaffold)
-        if: steps.workspace.outputs.root == ''
-        run: |
-          echo "::notice::No Rust workspace at src/Cargo.toml yet (issue #14 scaffolding pending). Rust checks skipped."
+  msrv:
+    name: MSRV (1.85)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.85.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+
+      - name: cargo check on MSRV
+        run: cargo check --workspace --all-targets
+
+  audit:
+    name: cargo audit (RustSec)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit@0.21
+
+      - name: cargo audit
+        run: cargo audit
 
   linear-history:
     name: linear history (no merge commits)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
