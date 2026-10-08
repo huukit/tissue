@@ -111,7 +111,7 @@ jobs:
             exit 1
           fi
 
-      - name: Smoke test (version, help, init/create/list round trip)
+      - name: Smoke test (version, help, init/create/list round trip, standalone serve)
         run: |
           set -eu
           bin="$PWD/src/target/x86_64-unknown-linux-musl/release/tissue"
@@ -126,6 +126,23 @@ jobs:
           "$bin" create IAM-1 "smoke" --body "round trip"
           "$bin" list | grep -q "IAM-1"
           "$bin" show IAM-1 | grep -q "round trip"
+          # Standalone path: binary outside any source tree must serve the GUI
+          # and API from embedded assets (guard for #39's defect class).
+          cp "$bin" ./tissue-standalone
+          ./tissue-standalone serve --port 7399 &
+          srv=$!
+          for _ in $(seq 1 50); do
+            if command -v curl >/dev/null && curl -sf http://127.0.0.1:7399/ >/dev/null 2>&1; then break; fi
+            sleep 0.2
+          done
+          grep_out="$(python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:7399/').read().decode())" )" || true
+          case "$grep_out" in
+            *"<html"*|*"<!DOCTYPE"*) echo "standalone serve: GUI served" ;;
+            *) echo "::error::standalone serve did not return the GUI"; kill $srv; exit 1 ;;
+          esac
+          api="$(python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:7399/api/issues').read().decode())")"
+          case "$api" in *"IAM-1"*) echo "standalone serve: API live" ;; *) echo "::error::standalone API missing IAM-1"; kill $srv; exit 1 ;; esac
+          kill $srv
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
