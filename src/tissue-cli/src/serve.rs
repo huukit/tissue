@@ -121,7 +121,7 @@ fn scan_issues(repo: &Path) -> Vec<IssueFile> {
 
 fn issue_summary_json(issue: &IssueFile) -> String {
     format!(
-        "{{\"id\":{},\"title\":{},\"status\":\"{}\",\"release\":{},\"tags\":{},\"needsReview\":{},\"created\":{},\"updated\":{}}}",
+        "{{\"id\":{},\"title\":{},\"status\":\"{}\",\"release\":{},\"tags\":{},\"created\":{},\"updated\":{}}}",
         json_str(&issue.id),
         json_str(&issue.title),
         issue.status.as_str(),
@@ -130,7 +130,6 @@ fn issue_summary_json(issue: &IssueFile) -> String {
             None => "null".to_string(),
         },
         json_list(&issue.tags),
-        issue.needs_review(),
         json_str(&issue.created),
         json_str(&issue.updated),
     )
@@ -139,7 +138,7 @@ fn issue_summary_json(issue: &IssueFile) -> String {
 fn api_issues(stream: &mut TcpStream, repo: &Path) -> Result<(), String> {
     let issues = scan_issues(repo);
     let items: Vec<String> = issues.iter().map(issue_summary_json).collect();
-    let body = format!("[{}]", items.join(","));
+    let body = format!("{{\"issues\":[{}]}}", items.join(","));
     respond_json(stream, 200, &body)
 }
 
@@ -152,11 +151,11 @@ fn api_issue_detail(stream: &mut TcpStream, repo: &Path, id: &str) -> Result<(),
             &format!("{{\"error\":\"issue not found: {}\"}}", id),
         );
     };
-    let body = format!(
-        "{{\"issue\":{},\"body\":{}}}",
-        issue_summary_json(&issue),
-        json_str(&issue.body)
-    );
+    // Body inside the issue object (canonical contract, PR #31):
+    // {"issue": {<summary fields>, "body": "raw markdown"}}
+    let mut summary = issue_summary_json(&issue);
+    summary.pop();
+    let body = "{\"issue\":".to_string() + &summary + ",\"body\":" + &json_str(&issue.body) + "}}";
     respond_json(stream, 200, &body)
 }
 
@@ -288,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn issue_summary_marks_needs_review() {
+    fn issue_summary_has_no_needs_review_field() {
         let now = "2026-10-08T09:00:00Z";
         let mut issue = IssueFile::new(
             "IAM-1",
@@ -298,8 +297,10 @@ mod tests {
             now,
         )
         .unwrap();
-        assert!(!issue_summary_json(&issue).contains("\"needsReview\":true"));
+        assert!(!issue_summary_json(&issue).contains("needsReview"));
         issue.add_tag(tissue_core::human::NEEDS_REVIEW, now);
-        assert!(issue_summary_json(&issue).contains("\"needsReview\":true"));
+        // The tag is the single source of truth; no derived boolean field.
+        assert!(issue_summary_json(&issue).contains("\"needs-review\""));
+        assert!(!issue_summary_json(&issue).contains("needsReview"));
     }
 }
