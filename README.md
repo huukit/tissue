@@ -79,6 +79,37 @@ toolchain, no node, no server dependencies.
 
 The viewer is read-only and loopback-only: it binds `127.0.0.1` exclusively
 and refuses every non-GET request — nothing is exposed beyond your machine.
+## Getting started — container
+
+The PoC runs as a single static binary in a minimal container. The GUI
+assets are embedded in the binary, so the final image contains nothing
+else.
+
+```sh
+# Build the image (multi-stage: musl build -> scratch final stage)
+docker build -f Dockerfile -t tissue:poc .
+
+# View an issue repo in the browser (loopback only)
+docker run --rm -p 127.0.0.1:8080:8080 \
+  -v /path/to/myproject-issues:/issues tissue:poc \
+  serve --port 8080 --repo /issues
+```
+
+Then open `http://127.0.0.1:8080`.
+
+Any CLI command works through the entrypoint:
+
+```sh
+docker run --rm -v /path/to/myproject-issues:/issues tissue:poc list --repo /issues
+```
+
+**Publish loopback-only.** The viewer is a local tool; always publish
+with `-p 127.0.0.1:...`. The container faithfully refuses non-loopback
+binding, and publishing on any other address exposes your issue repo to
+the network.
+
+CI builds the image on every push to `main` and uploads it as a
+workflow artifact (`tissue-poc-container-image`).
 
 ## The joke
 

@@ -1,0 +1,8 @@
+# Keep the build context minimal: the Dockerfile only needs src/.
+# Excludes .git and build artifacts from context upload and image cache.
+.git
+src/target
+operations
+tools
+*.md
+.github

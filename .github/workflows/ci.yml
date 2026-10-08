@@ -208,3 +208,43 @@ jobs:
             exit 1
           fi
           echo "OK: no merge commits in $base..$head"
+
+  container:
+    name: container image (build + upload tar)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the tissue image
+        run: docker build -f Dockerfile -t tissue:poc .
+      - name: Verify final image contains only the tissue binary
+        run: |
+          set -eu
+          docker create --name inspect tissue:poc >/dev/null
+          docker export inspect | tar -tv | awk '{print $NF}' | sed 's|^\./|/|; s|^\.|/|' | sort -u > /tmp/entries.txt
+          docker rm inspect >/dev/null
+          bad="$(grep -v -e '^/$' -e '^/tissue$' -e '^$' /tmp/entries.txt || true)"
+          if [ -n "$bad" ]; then
+            echo "::error::Unexpected files in final image:"
+            echo "$bad"
+            exit 1
+          fi
+          echo "OK: final image contains only the tissue binary"
+      - name: Loopback-only publish smoke test
+        run: |
+          set -eu
+          scratch="$(mktemp -d)"
+          git init --quiet "$scratch"
+          docker run --rm -d --name tissue-smoke             -p 127.0.0.1:8080:8080 -v "$scratch:/issues" tissue:poc             serve --port 8080 --repo /issues >/dev/null
+          sleep 2
+          code="$(python3 -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8080/').status)")"
+          test "$code" = "200"
+          echo "OK: GUI reachable on loopback (127.0.0.1 only)"
+          docker stop tissue-smoke >/dev/null
+      - name: Export image tar
+        run: docker save tissue:poc -o /tmp/tissue-poc-image.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tissue-poc-container-image
+          path: /tmp/tissue-poc-image.tar
+          retention-days: 14
