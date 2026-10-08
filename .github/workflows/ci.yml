@@ -103,7 +103,7 @@ jobs:
         run: |
           bin=src/target/x86_64-unknown-linux-musl/release/tissue
           test -x "$bin"
-          if ldd "$bin" 2>&1 | grep -q "not a dynamic executable"; then
+          if ldd "$bin" 2>&1 | grep -Eq "not a dynamic executable|statically linked"; then
             echo "OK: static binary"
           else
             echo "::error::Binary is dynamically linked:"
