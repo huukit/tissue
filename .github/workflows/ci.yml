@@ -239,7 +239,8 @@ jobs:
         run: |
           set -eu
           scratch="$(mktemp -d)"
-          git init --quiet "$scratch"
+          docker run --rm -v "$scratch:/issues" tissue:poc \
+            init --repo /issues >/dev/null
           docker run --rm -d --name tissue-smoke             -p 127.0.0.1:8080:8080 -v "$scratch:/issues" tissue:poc             serve --port 8080 --repo /issues >/dev/null
           sleep 2
           code="$(python3 -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8080/').status)")"
