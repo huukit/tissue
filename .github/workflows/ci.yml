@@ -75,7 +75,7 @@ jobs:
       - name: Install cargo-audit
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-audit@0.21
+          tool: cargo-audit@latest
 
       - name: cargo audit
         run: cargo audit
