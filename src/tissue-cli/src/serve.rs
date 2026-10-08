@@ -10,6 +10,12 @@ use std::path::{Path, PathBuf};
 
 use tissue_core::human::{IssueFile, ReleaseFile};
 
+/// GUI assets embedded at compile time so a standalone binary serves the
+/// viewer with no external files (#38 standalone path).
+const GUI_INDEX_HTML: &str = include_str!("../../gui/index.html");
+const GUI_APP_JS: &str = include_str!("../../gui/app.js");
+const GUI_STYLE_CSS: &str = include_str!("../../gui/style.css");
+
 use crate::{issues_dir, tissue_dir};
 
 /// Default port for the loopback viewer.
@@ -188,6 +194,7 @@ fn api_releases(stream: &mut TcpStream, repo: &Path) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 fn static_route(stream: &mut TcpStream, path: &str, gui_root: &Path) -> Result<(), String> {
+    let _ = gui_root;
     let rel = path.trim_matches('/');
     let rel = if rel.is_empty() { "index.html" } else { rel };
     // Reject traversal: only simple, separator-free names under the root.
@@ -197,25 +204,17 @@ fn static_route(stream: &mut TcpStream, path: &str, gui_root: &Path) -> Result<(
     {
         return respond_json(stream, 404, "{\"error\":\"not found\"}");
     }
-    let file = gui_root.join(rel);
-    let Ok(bytes) = std::fs::read(&file) else {
-        return respond_json(stream, 404, "{\"error\":\"not found\"}");
+    let (bytes, ctype) = match rel {
+        "index.html" => (GUI_INDEX_HTML.as_bytes(), "text/html; charset=utf-8"),
+        "app.js" => (
+            GUI_APP_JS.as_bytes(),
+            "application/javascript; charset=utf-8",
+        ),
+        "style.css" => (GUI_STYLE_CSS.as_bytes(), "text/css; charset=utf-8"),
+        _ => return respond_json(stream, 404, "{\"error\":\"not found\"}"),
     };
-    let ctype = match file.extension().and_then(|e| e.to_str()) {
-        Some("html") => "text/html; charset=utf-8",
-        Some("css") => "text/css; charset=utf-8",
-        Some("js") => "application/javascript; charset=utf-8",
-        Some("json") => "application/json",
-        Some("svg") => "image/svg+xml",
-        Some("png") => "image/png",
-        _ => "application/octet-stream",
-    };
-    write_response(stream, 200, ctype, &bytes)
+    write_response(stream, 200, ctype, bytes)
 }
-
-// ---------------------------------------------------------------------------
-// HTTP plumbing
-// ---------------------------------------------------------------------------
 
 fn write_response(
     stream: &mut TcpStream,
