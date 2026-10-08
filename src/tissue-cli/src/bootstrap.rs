@@ -279,16 +279,8 @@ fn fetch_github_issue(gh_repo: &str, number: u64) -> Result<IssueJson, String> {
             })
             .unwrap_or_default(),
         url: string_field(&v, "url", number)?,
-        created_at: v
-            .get("createdAt")
-            .and_then(|s| s.as_str())
-            .unwrap_or("")
-            .to_string(),
-        updated_at: v
-            .get("updatedAt")
-            .and_then(|s| s.as_str())
-            .unwrap_or("")
-            .to_string(),
+        created_at: string_field(&v, "createdAt", number)?,
+        updated_at: string_field(&v, "updatedAt", number)?,
     })
 }
 
