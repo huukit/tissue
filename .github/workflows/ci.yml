@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  rust:
+    name: fmt / check / clippy / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+
+      - name: Ensure workspace root exists
+        run: mkdir -p src
+
+      - name: Locate workspace manifest
+        id: workspace
+        run: |
+          if [ -f src/Cargo.toml ]; then
+            echo "root=src" >> "$GITHUB_OUTPUT"
+          else
+            echo "root=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install toolchain components for workspace
+        if: steps.workspace.outputs.root != ''
+        run: rustup component add rustfmt clippy
+
+      - name: cargo fmt --check
+        if: steps.workspace.outputs.root != ''
+        working-directory: ${{ steps.workspace.outputs.root }}
+        run: cargo fmt --all --check
+
+      - name: cargo check
+        if: steps.workspace.outputs.root != ''
+        working-directory: ${{ steps.workspace.outputs.root }}
+        run: cargo check --workspace --all-targets
+
+      - name: cargo clippy
+        if: steps.workspace.outputs.root != ''
+        working-directory: ${{ steps.workspace.outputs.root }}
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        if: steps.workspace.outputs.root != ''
+        working-directory: ${{ steps.workspace.outputs.root }}
+        run: cargo test --workspace
+
+      - name: Skip notice (pre-scaffold)
+        if: steps.workspace.outputs.root == ''
+        run: |
+          echo "::notice::No Rust workspace at src/Cargo.toml yet (issue #14 scaffolding pending). Rust checks skipped."
+
+  linear-history:
+    name: linear history (no merge commits)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject merge commits in PR ancestry
+        run: |
+          set -eu
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+            if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+              echo "No previous main head to compare against; skipping range check"
+              exit 0
+            fi
+          fi
+          merges="$(git rev-list --merges "$base..$head")"
+          if [ -n "$merges" ]; then
+            echo "::error::Merge commits found in PR ancestry (AGENTS.md §2 forbids merge commits):"
+            echo "$merges" | while read -r sha; do
+              git --no-pager log -1 --format='  %h %s' "$sha"
+            done
+            exit 1
+          fi
+          echo "OK: no merge commits in $base..$head"
