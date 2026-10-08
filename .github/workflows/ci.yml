@@ -245,9 +245,19 @@ jobs:
           (cd src && cargo build -p tissue-cli --quiet)
           src/target/debug/tissue init --repo "$scratch" >/dev/null
           docker run --rm -d --name tissue-smoke             -p 127.0.0.1:8080:8080 -v "$scratch:/issues" tissue:poc             serve --port 8080 --repo /issues >/dev/null
-          sleep 2
-          code="$(python3 -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8080/').status)")"
-          test "$code" = "200"
+          ok=""
+          for i in 1 2 3 4 5; do
+            sleep 2
+            if code="$(python3 -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8080/').status)" 2>/dev/null)" \
+               && [ "$code" = "200" ]; then
+              ok=yes
+              break
+            fi
+            echo "attempt $i failed (code=${code:-none}); container logs:"
+            docker logs tissue-smoke 2>&1 | tail -5
+          done
+          docker logs tissue-smoke 2>&1 | tail -10
+          test "$ok" = "yes"
           echo "OK: GUI reachable on loopback (127.0.0.1 only)"
           docker stop tissue-smoke >/dev/null
       - name: Export image tar
