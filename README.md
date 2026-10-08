@@ -97,11 +97,16 @@ docker run --rm -p 127.0.0.1:8080:8080 \
 
 Then open `http://127.0.0.1:8080`.
 
-Any CLI command works through the entrypoint:
+Read-only CLI commands work through the entrypoint:
 
 ```sh
 docker run --rm -v /path/to/myproject-issues:/issues tissue:poc list --repo /issues
 ```
+
+Bootstrap (`tissue init`) runs on the host with a local binary: the
+final image contains only the tissue binary by design, and `init`
+needs the git CLI. The container is for viewing and read-only commands
+against an existing issue repo.
 
 **Publish loopback-only.** The viewer is a local tool; always publish
 with `-p 127.0.0.1:...`. The container faithfully refuses non-loopback
