@@ -134,6 +134,31 @@ jobs:
           path: src/target/x86_64-unknown-linux-musl/release/tissue
           if-no-files-found: error
 
+  gui:
+    name: gui (tsc sync check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Compile app.ts strictly and compare with checked-in app.js
+        run: |
+          set -eu
+          cd src/gui
+          npx -y typescript@5.6 tsc --strict --noEmitOnError --target es2017 app.ts --outFile /tmp/app-fresh.js
+          if cmp -s app.js /tmp/app-fresh.js; then
+            echo "OK: app.js matches a fresh strict tsc compile of app.ts"
+          else
+            echo "::error::app.js is stale or hand-edited relative to app.ts. Regenerate with:"
+            echo "::error::  cd src/gui && npx -y typescript@5.6 tsc --strict --noEmitOnError --target es2017 app.ts --outFile app.js"
+            diff app.js /tmp/app-fresh.js || true
+            exit 1
+          fi
+
   linear-history:
     name: linear history (no merge commits)
     runs-on: ubuntu-latest
