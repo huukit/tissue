@@ -80,6 +80,60 @@ jobs:
       - name: cargo audit
         run: cargo audit
 
+  release:
+    name: static binary (build + smoke test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+
+      - name: Build static release binary
+        working-directory: src
+        run: cargo build --release --target x86_64-unknown-linux-musl
+
+      - name: Verify the binary is fully static
+        run: |
+          bin=src/target/x86_64-unknown-linux-musl/release/tissue
+          test -x "$bin"
+          if ldd "$bin" 2>&1 | grep -q "not a dynamic executable"; then
+            echo "OK: static binary"
+          else
+            echo "::error::Binary is dynamically linked:"
+            ldd "$bin"
+            exit 1
+          fi
+
+      - name: Smoke test (version, help, init/create/list round trip)
+        run: |
+          set -eu
+          bin="$PWD/src/target/x86_64-unknown-linux-musl/release/tissue"
+          "$bin" --version
+          "$bin" --help | grep -q "tissue"
+          scratch="$(mktemp -d)"
+          cd "$scratch"
+          git init --quiet
+          git config user.email smoke@tissue.test
+          git config user.name smoke
+          "$bin" init
+          "$bin" create IAM-1 "smoke" --body "round trip"
+          "$bin" list | grep -q "IAM-1"
+          "$bin" show IAM-1 | grep -q "round trip"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tissue-x86_64-unknown-linux-musl
+          path: src/target/x86_64-unknown-linux-musl/release/tissue
+          if-no-files-found: error
+
   linear-history:
     name: linear history (no merge commits)
     runs-on: ubuntu-latest
