@@ -8,15 +8,19 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
 jobs:
   rust:
-    name: fmt / check / clippy / test
+    name: fmt / check / clippy / test / audit / gui tsc
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: src
@@ -43,8 +47,35 @@ jobs:
       - name: cargo test
         run: cargo test --workspace
 
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit@latest
+
+      - name: cargo audit
+        run: cargo audit
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: gui (tsc sync check)
+        working-directory: src/gui
+        run: |
+          set -eu
+          npx -y -p typescript@5.6 tsc --strict --noEmitOnError --target es2017 app.ts --outFile /tmp/app-fresh.js
+          if cmp -s app.js /tmp/app-fresh.js; then
+            echo "OK: app.js matches a fresh strict tsc compile of app.ts"
+          else
+            echo "::error::app.js is stale or hand-edited relative to app.ts. Regenerate with:"
+            echo "::error::  cd src/gui && npx -y -p typescript@5.6 tsc --strict --noEmitOnError --target es2017 app.ts --outFile app.js"
+            diff app.js /tmp/app-fresh.js || true
+            exit 1
+          fi
+
   msrv:
     name: MSRV (1.85)
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -62,26 +93,9 @@ jobs:
       - name: cargo check on MSRV
         run: cargo check --workspace --all-targets
 
-  audit:
-    name: cargo audit (RustSec)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: src
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install cargo-audit
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-audit@latest
-
-      - name: cargo audit
-        run: cargo audit
-
   release:
     name: static binary (build + smoke test)
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -151,31 +165,6 @@ jobs:
           path: src/target/x86_64-unknown-linux-musl/release/tissue
           if-no-files-found: error
 
-  gui:
-    name: gui (tsc sync check)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Compile app.ts strictly and compare with checked-in app.js
-        run: |
-          set -eu
-          cd src/gui
-          npx -y -p typescript@5.6 tsc --strict --noEmitOnError --target es2017 app.ts --outFile /tmp/app-fresh.js
-          if cmp -s app.js /tmp/app-fresh.js; then
-            echo "OK: app.js matches a fresh strict tsc compile of app.ts"
-          else
-            echo "::error::app.js is stale or hand-edited relative to app.ts. Regenerate with:"
-            echo "::error::  cd src/gui && npx -y -p typescript@5.6 tsc --strict --noEmitOnError --target es2017 app.ts --outFile app.js"
-            diff app.js /tmp/app-fresh.js || true
-            exit 1
-          fi
-
   linear-history:
     name: linear history (no merge commits)
     runs-on: ubuntu-latest
@@ -211,6 +200,7 @@ jobs:
 
   container:
     name: container image (build + upload tar)
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -244,7 +234,9 @@ jobs:
           # intentionally omits (AC3). The container is for viewing.
           (cd src && cargo build -p tissue-cli --quiet)
           src/target/debug/tissue init --repo "$scratch" >/dev/null
-          docker run --rm -d --name tissue-smoke --network host             -v "$scratch:/issues" tissue:poc             serve --port 8080 --repo /issues >/dev/null
+          docker run --rm -d --name tissue-smoke --network host \
+            -v "$scratch:/issues" tissue:poc \
+            serve --port 8080 --repo /issues >/dev/null
           ok=""
           for i in 1 2 3 4 5; do
             sleep 2
