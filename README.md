@@ -90,7 +90,7 @@ else.
 docker build -f Dockerfile -t tissue:poc .
 
 # View an issue repo in the browser (loopback only)
-docker run --rm -p 127.0.0.1:8080:8080 \
+docker run --rm --network host \
   -v /path/to/myproject-issues:/issues tissue:poc \
   serve --port 8080 --repo /issues
 ```
@@ -108,10 +108,12 @@ final image contains only the tissue binary by design, and `init`
 needs the git CLI. The container is for viewing and read-only commands
 against an existing issue repo.
 
-**Publish loopback-only.** The viewer is a local tool; always publish
-with `-p 127.0.0.1:...`. The container faithfully refuses non-loopback
-binding, and publishing on any other address exposes your issue repo to
-the network.
+**Loopback-only.** The viewer binds `127.0.0.1` exclusively and
+refuses to serve on any other address. In the container, use
+`--network host` (Linux): the binary then binds the host's loopback
+directly, so `-p` publishing is unnecessary and nothing is exposed to
+the network. Binding inside a bridge-network container is unreachable
+by design — the port is never published.
 
 CI builds the image on every push to `main` and uploads it as a
 workflow artifact (`tissue-poc-container-image`).

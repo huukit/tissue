@@ -6,8 +6,8 @@
 # at runtime.
 #
 # Build:  docker build -f Dockerfile -t tissue:poc .
-# Run:    docker run --rm -p 127.0.0.1:8080:8080 \
-#           -v /path/to/myproject-issues:/issues tissue:poc serve --repo /issues
+# Run:    docker run --rm --network host \
+#           -v /path/to/myproject-issues:/issues tissue:poc serve --port 8080 --repo /issues
 #
 # Publishing is loopback-only by design: publish with -p 127.0.0.1:...
 # Never bind the viewer to a public interface (AGENTS.md §5).

@@ -244,7 +244,7 @@ jobs:
           # intentionally omits (AC3). The container is for viewing.
           (cd src && cargo build -p tissue-cli --quiet)
           src/target/debug/tissue init --repo "$scratch" >/dev/null
-          docker run --rm -d --name tissue-smoke             -p 127.0.0.1:8080:8080 -v "$scratch:/issues" tissue:poc             serve --port 8080 --repo /issues >/dev/null
+          docker run --rm -d --name tissue-smoke --network host             -v "$scratch:/issues" tissue:poc             serve --port 8080 --repo /issues >/dev/null
           ok=""
           for i in 1 2 3 4 5; do
             sleep 2
