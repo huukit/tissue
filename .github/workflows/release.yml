@@ -47,6 +47,33 @@ jobs:
           bin="target/${{ matrix.target }}/release/tissue$( [ "$RUNNER_OS" = Windows ] && echo '.exe' )"
           "$bin" --version
           "$bin" --help | grep -q "tissue"
+          # Functional round trip on a scratch repo (skip on macos runners:
+          # no git CLI guarantee in the bare runner image).
+          if [ "$RUNNER_OS" != macOS ]; then
+            scratch="$(mktemp -d)"
+            pushd "$scratch"
+            git init --quiet
+            git config user.email smoke@tissue.test
+            git config user.name smoke
+            "$OLDPWD/$bin" init >/dev/null
+            "$OLDPWD/$bin" create IAM-1 smoke --body "round trip" >/dev/null
+            "$OLDPWD/$bin" list | grep -q "IAM-1"
+            popd
+          fi
+
+      - name: Staticness check (musl only)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        working-directory: src
+        run: |
+          bin="target/${{ matrix.target }}/release/tissue"
+          if ldd "$bin" 2>&1 | grep -Eq "not a dynamic executable|statically linked"; then
+            echo "OK: static binary"
+          else
+            echo "::error::Release binary is dynamically linked:"
+            ldd "$bin"
+            exit 1
+          fi
+
       - name: Package
         shell: bash
         run: |
