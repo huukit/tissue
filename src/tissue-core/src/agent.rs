@@ -159,7 +159,6 @@ pub enum RecordData {
     HumanSync {
         trigger: String,
         summary_of_human_change: String,
-        #[serde(default)]
         reconciliation: String,
     },
     Proposal {
@@ -168,23 +167,17 @@ pub enum RecordData {
         field: String,
         current: String,
         proposed: String,
-        #[serde(default)]
         rationale: String,
         state: ProposalState,
     },
     Approval {
         proposal_id: String,
-        #[serde(default = "default_true")]
         applied: bool,
     },
     Rejection {
         proposal_id: String,
         reason: String,
     },
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
