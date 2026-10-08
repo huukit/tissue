@@ -9,7 +9,10 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+use tissue_core::git;
 use tissue_core::human::{valid_issue_id, IssueFile, IssueStatus};
+use tissue_core::state::Decision;
+use tissue_core::sync::{Actor, Core, Field, ProposalDraft};
 
 /// Tissue — issue tracker for development with AI in the loop.
 ///
@@ -58,29 +61,65 @@ enum Commands {
         /// Issue id, e.g. `IAM-42`.
         id: String,
     },
-    /// Reconcile the AI stream with your latest human edit.
-    /// Not yet available: lands with the sync loop (issue #12).
+    /// Record a human edit in the AI stream: agents reconcile from this
+    /// record onward, never from raw diffs. Run after editing issue.md.
     Sync {
         /// Issue id, e.g. `IAM-42`.
         id: String,
+        /// One-line summary of what you changed and why.
+        #[arg(long, value_name = "TEXT")]
+        summary: String,
+        /// Human identity recorded in the stream and commit
+        /// (e.g. `human:tuomas`).
+        #[arg(long, value_name = "ID", default_value = "human:local")]
+        actor: String,
     },
     /// Propose a change to an issue's human format for review.
-    /// Not yet available: lands with the sync loop (issue #12).
+    /// Fails safe if the current value no longer matches.
     Propose {
         /// Issue id, e.g. `IAM-42`.
         id: String,
+        /// Field to change: title, status, or release.
+        #[arg(long, value_name = "FIELD")]
+        field: String,
+        /// The value the field currently has (stale proposals are refused).
+        #[arg(long, value_name = "VALUE")]
+        current: String,
+        /// The value the field should have.
+        #[arg(long, value_name = "VALUE")]
+        proposed: String,
+        /// Why the change is right, recorded for the human reviewer.
+        #[arg(long, value_name = "TEXT", default_value = "")]
+        rationale: String,
+        /// Agent identity recorded in the stream and commit
+        /// (e.g. `agent:dev-1`).
+        #[arg(long, value_name = "ID", default_value = "agent:local")]
+        actor: String,
     },
-    /// Approve a pending proposal on an issue.
-    /// Not yet available: lands with the sync loop (issue #12).
+    /// Approve a pending proposal: applies the edit and clears
+    /// `needs-review`.
     Approve {
         /// Issue id, e.g. `IAM-42`.
         id: String,
+        /// Proposal id printed by `tissue propose`.
+        proposal_id: String,
+        /// Human identity recorded in the stream and commit.
+        #[arg(long, value_name = "ID", default_value = "human:local")]
+        actor: String,
     },
-    /// Reject a pending proposal on an issue.
-    /// Not yet available: lands with the sync loop (issue #12).
+    /// Reject a pending proposal: records the reason so agents can learn
+    /// from it, and clears `needs-review`.
     Reject {
         /// Issue id, e.g. `IAM-42`.
         id: String,
+        /// Proposal id printed by `tissue propose`.
+        proposal_id: String,
+        /// Why it is rejected (required: rejections are data).
+        #[arg(long, value_name = "TEXT")]
+        reason: String,
+        /// Human identity recorded in the stream and commit.
+        #[arg(long, value_name = "ID", default_value = "human:local")]
+        actor: String,
     },
 }
 
@@ -112,10 +151,6 @@ fn tissue_dir(repo: &Path) -> PathBuf {
 
 fn issues_dir(repo: &Path) -> PathBuf {
     tissue_dir(repo).join("issues")
-}
-
-fn releases_dir(repo: &Path) -> PathBuf {
-    tissue_dir(repo).join("releases")
 }
 
 fn issue_dir(repo: &Path, id: &str) -> PathBuf {
@@ -157,13 +192,125 @@ fn run(cli: Cli) -> Result<(), String> {
         Commands::Create { id, title, body } => create(&repo, &id, &title, body),
         Commands::List { status } => list(&repo, &status),
         Commands::Show { id } => show(&repo, &id),
-        Commands::Sync { .. }
-        | Commands::Propose { .. }
-        | Commands::Approve { .. }
-        | Commands::Reject { .. } => {
-            Err("not yet available: the sync/proposal loop lands with issue #12".to_string())
-        }
+        Commands::Sync { id, summary, actor } => sync_cmd(&repo, &id, &summary, &actor),
+        Commands::Propose {
+            id,
+            field,
+            current,
+            proposed,
+            rationale,
+            actor,
+        } => propose_cmd(&repo, &id, &field, &current, &proposed, &rationale, &actor),
+        Commands::Approve {
+            id,
+            proposal_id,
+            actor,
+        } => decide_cmd(&repo, &id, &proposal_id, Decision::Approve, None, &actor),
+        Commands::Reject {
+            id,
+            proposal_id,
+            reason,
+            actor,
+        } => decide_cmd(
+            &repo,
+            &id,
+            &proposal_id,
+            Decision::Reject,
+            Some(&reason),
+            &actor,
+        ),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Sync / proposal loop (thin wrappers over tissue-core::sync)
+// ---------------------------------------------------------------------------
+
+fn actor_from(id: &str) -> Actor {
+    let author = git::Author {
+        name: id.to_string(),
+        email: format!("{}@tissue.local", id.replace(':', "-")),
+    };
+    Actor {
+        author,
+        id: id.to_string(),
+    }
+}
+
+fn core_for(repo: &Path) -> Result<Core, String> {
+    require_repo(repo)?;
+    let grepo = git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    Ok(Core::new(grepo))
+}
+
+fn sync_cmd(repo: &Path, id: &str, summary: &str, actor_id: &str) -> Result<(), String> {
+    check_issue_id(id)?;
+    let core = core_for(repo)?;
+    let actor = actor_from(actor_id);
+    let commit = core
+        .sync(id, &actor, &now_utc(), summary)
+        .map_err(|e| format!("sync: {e}"))?;
+    println!("synced {id} ({commit})");
+    Ok(())
+}
+
+fn propose_cmd(
+    repo: &Path,
+    id: &str,
+    field: &str,
+    current: &str,
+    proposed: &str,
+    rationale: &str,
+    actor_id: &str,
+) -> Result<(), String> {
+    check_issue_id(id)?;
+    let field = match field {
+        "title" => Field::Title,
+        "status" => Field::Status,
+        "release" => Field::Release,
+        other => {
+            return Err(format!(
+                "invalid field `{other}`: expected title, status, or release"
+            ))
+        }
+    };
+    let core = core_for(repo)?;
+    let actor = actor_from(actor_id);
+    let now = now_utc();
+    let draft = ProposalDraft {
+        now: &now,
+        field,
+        current,
+        proposed,
+        rationale,
+    };
+    let proposal_id = core
+        .propose(id, &actor, &draft)
+        .map_err(|e| format!("propose: {e}"))?;
+    println!("proposed {id}/{proposal_id}: tagged needs-review, awaiting human decision");
+    Ok(())
+}
+
+fn decide_cmd(
+    repo: &Path,
+    id: &str,
+    proposal_id: &str,
+    decision: Decision,
+    reason: Option<&str>,
+    actor_id: &str,
+) -> Result<(), String> {
+    check_issue_id(id)?;
+    let core = core_for(repo)?;
+    let actor = actor_from(actor_id);
+    let commit = core
+        .decide(id, &actor, &now_utc(), proposal_id, decision, reason)
+        .map_err(|e| format!("decide: {e}"))?;
+    let verb = match decision {
+        Decision::Approve => "approved",
+        Decision::Reject => "rejected",
+    };
+    println!("{verb} {id}/{proposal_id} ({commit})");
+    Ok(())
 }
 
 fn init(repo: &Path, project: Option<String>) -> Result<(), String> {
@@ -178,19 +325,24 @@ fn init(repo: &Path, project: Option<String>) -> Result<(), String> {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "myproject".to_string())
     });
-    std::fs::create_dir_all(issues_dir(repo))
-        .map_err(|e| format!("creating {}: {e}", issues_dir(repo).display()))?;
-    std::fs::create_dir_all(releases_dir(repo))
-        .map_err(|e| format!("creating {}: {e}", releases_dir(repo).display()))?;
+    // Core owns the structure: git init + .tissue/ skeleton + initial commit.
+    let grepo = git::Repo::init(repo).map_err(|e| format!("initializing repository: {e}"))?;
     let config = format!(
         "# Tissue configuration.\nproject: {}\n# Timestamps are RFC3339 UTC, e.g. 2026-10-08T09:00:00Z\n",
         yaml_escape(&project)
     );
-    std::fs::write(tissue_dir(repo).join("config.yml"), config)
-        .map_err(|e| format!("writing config.yml: {e}"))?;
+    let config_path = tissue_dir(repo).join("config.yml");
+    std::fs::write(&config_path, config).map_err(|e| format!("writing config.yml: {e}"))?;
+    let author = git::Author {
+        name: "tissue".to_string(),
+        email: "tissue@localhost".to_string(),
+    };
+    grepo
+        .commit_all_if_changed(&author, "tissue init: config.yml")
+        .map_err(|e| format!("committing config.yml: {e}"))?;
     println!(
         "initialized tissue repository for `{project}` in {}",
-        tissue_dir(repo).display()
+        grepo.root().display()
     );
     Ok(())
 }
