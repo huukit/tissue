@@ -63,7 +63,7 @@ impl IssueStatus {
         }
     }
 
-    fn from_str(s: &str) -> Result<Self> {
+    pub fn parse(s: &str) -> Result<Self> {
         match s {
             "open" => Ok(IssueStatus::Open),
             "in-progress" => Ok(IssueStatus::InProgress),
@@ -87,7 +87,7 @@ impl ReleaseStatus {
         }
     }
 
-    fn from_str(s: &str) -> Result<Self> {
+    pub fn parse(s: &str) -> Result<Self> {
         match s {
             "draft" => Ok(ReleaseStatus::Draft),
             "cut" => Ok(ReleaseStatus::Cut),
@@ -356,7 +356,7 @@ impl IssueFile {
         if title.contains('\n') {
             return Err(Error::Validation("title must be a single line".into()));
         }
-        let status = IssueStatus::from_str(&string_field(&mapping, "status")?)?;
+        let status = IssueStatus::parse(&string_field(&mapping, "status")?)?;
         let release = opt_string_field(&mapping, "release")?;
         let tags = tags_field(&mapping)?;
         let created = string_field(&mapping, "created")?;
@@ -425,6 +425,12 @@ impl IssueFile {
 
     /// Mutating helpers: any human-format mutation must bump `updated`.
     /// `now` is an RFC3339 timestamp supplied by the caller (no hidden clock).
+    pub fn set_title(&mut self, title: String, now: &str) {
+        self.title = title;
+        self.front.invalidate();
+        self.updated = now.to_string();
+    }
+
     pub fn set_status(&mut self, status: IssueStatus, now: &str) {
         self.status = status;
         self.front.invalidate();
@@ -508,7 +514,7 @@ impl ReleaseFile {
             return Err(Error::Validation(format!("id `{id}` is not `v` + semver")));
         }
         let title = string_field(&mapping, "title")?;
-        let status = ReleaseStatus::from_str(&string_field(&mapping, "status")?)?;
+        let status = ReleaseStatus::parse(&string_field(&mapping, "status")?)?;
         let target = opt_string_field(&mapping, "target")?;
         let created = string_field(&mapping, "created")?;
         let updated = string_field(&mapping, "updated")?;
@@ -645,7 +651,7 @@ mod tests {
         let bad = ISSUE.replace("status: open", "status: wontfix");
         assert!(IssueFile::parse(&bad).is_err());
         assert_eq!(
-            IssueStatus::from_str("in-progress").unwrap(),
+            IssueStatus::parse("in-progress").unwrap(),
             IssueStatus::InProgress
         );
     }
