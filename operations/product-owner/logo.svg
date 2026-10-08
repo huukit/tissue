@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- tissue logo draft: tissue box with a pulled sheet bearing an approval check -->
+  <rect x="0" y="0" width="256" height="256" rx="56" fill="#F4F1EA"/>
+  <!-- box body -->
+  <path d="M56 108 L200 108 L188 208 Q186 220 174 220 L82 220 Q70 220 68 208 Z" fill="#E9E4DA"/>
+  <!-- box top with oval slot -->
+  <ellipse cx="128" cy="108" rx="72" ry="26" fill="#D8D2C4"/>
+  <ellipse cx="128" cy="106" rx="56" ry="18" fill="#1C1B22"/>
+  <!-- pulled tissue sheet -->
+  <path d="M96 104 C96 84 110 78 128 80 C146 82 158 70 152 52 C148 40 158 30 170 36 C184 43 182 62 176 74 C170 88 154 98 140 100 C124 102 112 104 96 104 Z" fill="#FFFFFF" stroke="#1C1B22" stroke-width="5" stroke-linejoin="round"/>
+  <!-- AI sparkles being absorbed -->
+  <g fill="#FF6B5E">
+    <path d="M186 20 l3 8 8 3 -8 3 -3 8 -3 -8 -8 -3 8 -3 Z"/>
+    <path d="M206 52 l2 6 6 2 -6 2 -2 6 -2 -6 -6 -2 6 -2 Z"/>
+    <path d="M170 68 l2 5 5 2 -5 2 -2 5 -2 -5 -5 -2 5 -2 Z"/>
+  </g>
+  <!-- approval check on the sheet -->
+  <path d="M112 44 L124 56 L146 30" fill="none" stroke="#2E7D5B" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
