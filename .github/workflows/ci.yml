@@ -149,12 +149,12 @@ jobs:
         run: |
           set -eu
           cd src/gui
-          npx -y typescript@5.6 tsc --strict --noEmitOnError --target es2017 app.ts --outFile /tmp/app-fresh.js
+          npx -y -p typescript@5.6 tsc --strict --noEmitOnError --target es2017 app.ts --outFile /tmp/app-fresh.js
           if cmp -s app.js /tmp/app-fresh.js; then
             echo "OK: app.js matches a fresh strict tsc compile of app.ts"
           else
             echo "::error::app.js is stale or hand-edited relative to app.ts. Regenerate with:"
-            echo "::error::  cd src/gui && npx -y typescript@5.6 tsc --strict --noEmitOnError --target es2017 app.ts --outFile app.js"
+            echo "::error::  cd src/gui && npx -y -p typescript@5.6 tsc --strict --noEmitOnError --target es2017 app.ts --outFile app.js"
             diff app.js /tmp/app-fresh.js || true
             exit 1
           fi
