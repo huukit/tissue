@@ -1,0 +1,12 @@
+[package]
+name = "tissue-core"
+description = "Tissue core library: formats, sync, proposal state machine, git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }

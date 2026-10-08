@@ -1,0 +1,15 @@
+[package]
+name = "tissue-cli"
+description = "Tissue command-line interface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tissue-core = { path = "../tissue-core" }
+clap = { workspace = true }
+
+[[bin]]
+name = "tissue"
+path = "src/main.rs"
