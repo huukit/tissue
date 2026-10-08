@@ -4,6 +4,8 @@
 //! lives here. Commands that need the sync/proposal loop (#12) report a
 //! clear "not yet available" error until that lands.
 
+mod serve;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -106,6 +108,13 @@ enum Commands {
         /// Human identity recorded in the stream and commit.
         #[arg(long, value_name = "ID", default_value = "human:local")]
         actor: String,
+    },
+    /// Serve the read-only local viewer (GUI) on 127.0.0.1.
+    /// Loopback-only; no remote exposure.
+    Serve {
+        /// Port to listen on (default 7323).
+        #[arg(long, value_name = "N")]
+        port: Option<u16>,
     },
     /// Reject a pending proposal: records the reason so agents can learn
     /// from it, and clears `needs-review`.
@@ -219,6 +228,7 @@ fn run(cli: Cli) -> Result<(), String> {
             Some(&reason),
             &actor,
         ),
+        Commands::Serve { port } => serve_cmd(&repo, port),
     }
 }
 
@@ -531,6 +541,13 @@ fn show(repo: &Path, id: &str) -> Result<(), String> {
     println!();
     println!("{}", issue.body.trim_end());
     Ok(())
+}
+
+/// `tissue serve`: read-only loopback viewer wrapping the core scan (#30).
+fn serve_cmd(repo: &Path, port: Option<u16>) -> Result<(), String> {
+    let port = port.unwrap_or(serve::DEFAULT_PORT);
+    let gui_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../gui");
+    serve::serve(repo.to_path_buf(), port, gui_root)
 }
 
 #[cfg(test)]
