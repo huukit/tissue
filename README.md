@@ -62,6 +62,24 @@ Three skins over one core, so humans and agents always see the same truth:
 
 Early stage — product spec and decisions are settled, implementation is just beginning. The product state lives in [`operations/product-owner/STATE.md`](operations/product-owner/STATE.md), the roadmap in [`operations/project/ROADMAP.md`](operations/project/ROADMAP.md). Planned stack: Rust core/CLI/API, TypeScript GUI. Current milestone: the [PoC dogfood switch](https://github.com/huukit/tissue/issues/3) — run tissue's own issues in tissue.
 
+## Getting started — standalone
+
+Two commands and a browser. The release binary is fully static (musl); no Rust
+toolchain, no node, no server dependencies.
+
+1. **Get the binary** — download `tissue` from the
+   [releases page](https://github.com/huukit/tissue/releases) (static Linux
+   x86_64), or build from source: `cd src && cargo build --release`
+2. **Bootstrap a project** — `tissue init --from-github huukit/tissue`
+   creates `tissue-issues/` with this repo's own issues imported (via `gh`;
+   run `gh auth login` first), or `tissue init --remote /path/to/remote` for a
+   fully offline filesystem remote, or bare `tissue init` for an empty repo
+3. **View it** — `cd <your-project>-issues && tissue serve`, then open
+   <http://127.0.0.1:7323>
+
+The viewer is read-only and loopback-only: it binds `127.0.0.1` exclusively
+and refuses every non-GET request — nothing is exposed beyond your machine.
+
 ## The joke
 
 The name works on every level: a *tissue* wipes up the mess, and *issue* is right there inside it.
