@@ -332,6 +332,35 @@ pub fn valid_issue_id(id: &str) -> bool {
 }
 
 impl IssueFile {
+    /// Construct a new issue. `now` (RFC3339) stamps both `created` and
+    /// `updated`; timestamps come from the caller, not a hidden clock.
+    /// Front matter renders canonically on first serialize.
+    pub fn new(id: &str, title: &str, status: IssueStatus, body: &str, now: &str) -> Result<Self> {
+        if !valid_issue_id(id) {
+            return Err(Error::Validation(format!(
+                "id `{id}` does not match pattern [A-Z]+-<number>"
+            )));
+        }
+        if title.contains('\n') {
+            return Err(Error::Validation("title must be a single line".into()));
+        }
+        Ok(IssueFile {
+            id: id.to_string(),
+            title: title.to_string(),
+            status,
+            release: None,
+            tags: Vec::new(),
+            created: now.to_string(),
+            updated: now.to_string(),
+            body: body.to_string(),
+            front: FrontMatter {
+                raw: None,
+                extra: Mapping::new(),
+                dirty: true,
+            },
+        })
+    }
+
     /// Validate that the id matches its directory name (spec field rule).
     pub fn validate_against_dir(&self, dir_name: &str) -> Result<()> {
         if self.id != dir_name {
