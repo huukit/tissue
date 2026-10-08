@@ -544,7 +544,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[test]
     fn civil_from_unix_epoch() {
         // 2026-10-08T00:00:00Z = 1791436800 (a known Wednesday).
         let (y, m, d, h, mi, s) = civil_from_unix(1_791_417_600);
