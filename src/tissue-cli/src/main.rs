@@ -4,6 +4,7 @@
 //! lives here. Commands that need the sync/proposal loop (#12) report a
 //! clear "not yet available" error until that lands.
 
+mod bootstrap;
 mod serve;
 
 use std::path::{Path, PathBuf};
@@ -35,12 +36,32 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize a tissue repository: create the `.tissue/` structure.
+    /// Initialize a tissue repository: create the `.tissue/` structure,
+    /// optionally configuring a remote and importing GitHub issues (#37).
     Init {
         /// Project name written to `.tissue/config.yml` (defaults to the
         /// directory name).
         #[arg(long, value_name = "NAME")]
         project: Option<String>,
+        /// Import existing issues from a GitHub repository (OWNER/NAME)
+        /// as part of setup.
+        #[arg(long, value_name = "OWNER/NAME")]
+        from_github: Option<String>,
+        /// Configure a filesystem git remote at this path (fully offline);
+        /// created if it does not exist.
+        #[arg(long, value_name = "PATH")]
+        remote: Option<PathBuf>,
+        /// Issue repository location (default: <project>-issues/ under
+        /// the current directory when a remote or import source is given,
+        /// otherwise the current directory).
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+        /// Tissue id prefix for imported issues (default: IAM).
+        #[arg(long, value_name = "PREFIX", default_value = "IAM")]
+        id_prefix: String,
+        /// Show what init would do, write nothing.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Create a new issue.
     Create {
@@ -197,7 +218,24 @@ fn require_repo(repo: &Path) -> Result<(), String> {
 fn run(cli: Cli) -> Result<(), String> {
     let repo = repo_dir(cli.repo.as_ref());
     match cli.command {
-        Commands::Init { project } => init(&repo, project),
+        Commands::Init {
+            project,
+            from_github,
+            remote,
+            dir,
+            id_prefix,
+            dry_run,
+        } => bootstrap::run(
+            &repo,
+            &bootstrap::InitOptions {
+                project,
+                from_github,
+                remote,
+                dir,
+                id_prefix,
+                dry_run,
+            },
+        ),
         Commands::Create { id, title, body } => create(&repo, &id, &title, body),
         Commands::List { status } => list(&repo, &status),
         Commands::Show { id } => show(&repo, &id),
@@ -321,55 +359,6 @@ fn decide_cmd(
     };
     println!("{verb} {id}/{proposal_id} ({commit})");
     Ok(())
-}
-
-fn init(repo: &Path, project: Option<String>) -> Result<(), String> {
-    if tissue_dir(repo).exists() {
-        return Err(format!(
-            "repository already initialized at {}",
-            tissue_dir(repo).display()
-        ));
-    }
-    let project = project.unwrap_or_else(|| {
-        repo.file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "myproject".to_string())
-    });
-    // Core owns the structure: git init + .tissue/ skeleton + initial commit.
-    let grepo = git::Repo::init(repo).map_err(|e| format!("initializing repository: {e}"))?;
-    let config = format!(
-        "# Tissue configuration.\nproject: {}\n# Timestamps are RFC3339 UTC, e.g. 2026-10-08T09:00:00Z\n",
-        yaml_escape(&project)
-    );
-    let config_path = tissue_dir(repo).join("config.yml");
-    std::fs::write(&config_path, config).map_err(|e| format!("writing config.yml: {e}"))?;
-    let author = git::Author {
-        name: "tissue".to_string(),
-        email: "tissue@localhost".to_string(),
-    };
-    grepo
-        .commit_all_if_changed(&author, "tissue init: config.yml")
-        .map_err(|e| format!("committing config.yml: {e}"))?;
-    println!(
-        "initialized tissue repository for `{project}` in {}",
-        grepo.root().display()
-    );
-    Ok(())
-}
-
-/// Escape a scalar for YAML output. Conservative: quote unless the value is
-/// a plain-safe string.
-fn yaml_escape(s: &str) -> String {
-    let plain_safe = !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || " -_./".contains(c))
-        && !s.starts_with([' ', '-', '.'])
-        && !s.ends_with(' ');
-    if plain_safe {
-        s.to_string()
-    } else {
-        format!("{:?}", s)
-    }
 }
 
 /// Current time as RFC3339 UTC, no external deps.
@@ -555,12 +544,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn yaml_escape_quotes_unsafe() {
-        assert_eq!(yaml_escape("myproject"), "myproject");
-        assert_eq!(yaml_escape("a: b"), "\"a: b\"");
-        assert_eq!(yaml_escape(""), "\"\"");
-    }
-
     #[test]
     fn civil_from_unix_epoch() {
         // 2026-10-08T00:00:00Z = 1791436800 (a known Wednesday).
