@@ -50,9 +50,17 @@ Three skins over one core, so humans and agents always see the same truth:
 | **REST API** | Remote/agent access, token-authenticated |
 | **GUI** | Review and triage — where the sync button lives |
 
+## Repository layout
+
+| Path | Content |
+|---|---|
+| `operations/product-owner/` | Product documents: vision, state, branding, format specs |
+| `operations/project/` | Project documents: roadmap, decision records |
+| `src/` | Source code — Rust workspace (`tissue-core`, `tissue-cli`) |
+
 ## Status
 
-Early stage — product spec and decisions are settled, implementation is just beginning. The product state lives in [`operations/product-owner/STATE.md`](operations/product-owner/STATE.md). Planned stack: Rust core/CLI/API, TypeScript GUI.
+Early stage — product spec and decisions are settled, implementation is just beginning. The product state lives in [`operations/product-owner/STATE.md`](operations/product-owner/STATE.md), the roadmap in [`operations/project/ROADMAP.md`](operations/project/ROADMAP.md). Planned stack: Rust core/CLI/API, TypeScript GUI. Current milestone: the [PoC dogfood switch](https://github.com/huukit/tissue/issues/3) — run tissue's own issues in tissue.
 
 ## The joke
 
