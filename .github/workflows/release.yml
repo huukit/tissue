@@ -13,21 +13,24 @@ env:
 jobs:
   build:
     name: build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
+    runs-on: [self-hosted, Linux]
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: self-hosted
             target: x86_64-unknown-linux-musl
             archive: tissue-x86_64-unknown-linux-musl.tar.gz
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            archive: tissue-x86_64-pc-windows-msvc.zip
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            archive: tissue-aarch64-apple-darwin.tar.gz
+          # Post-PoC cross-platform matrix (kept for when billing allows or
+          # more self-hosted runners exist; per #47 PO decision: Linux-only
+          # for the PoC — the owner's documented test path is linux-musl):
+          # - os: self-hosted
+          #   target: x86_64-pc-windows-msvc
+          #   archive: tissue-x86_64-pc-windows-msvc.zip
+          # - os: self-hosted
+          #   target: aarch64-apple-darwin
+          #   archive: tissue-aarch64-apple-darwin.tar.gz
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -96,7 +99,7 @@ jobs:
 
   publish:
     name: publish release
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     needs: build
     timeout-minutes: 10
     steps:
