@@ -47,7 +47,8 @@ jobs:
         shell: bash
         run: |
           set -eu
-          bin="target/${{ matrix.target }}/release/tissue$( [ "$RUNNER_OS" = Windows ] && echo '.exe' )"
+          case "$RUNNER_OS" in Windows) ext=.exe ;; *) ext= ;; esac
+          bin="target/${{ matrix.target }}/release/tissue$ext"
           "$bin" --version
           "$bin" --help | grep -q "tissue"
           # Functional round trip on a scratch repo (skip on macos runners:
@@ -82,7 +83,8 @@ jobs:
         run: |
           set -eu
           cd "src/target/${{ matrix.target }}/release"
-          bin=tissue$( [ "$RUNNER_OS" = Windows ] && echo '.exe' )
+          case "$RUNNER_OS" in Windows) ext=.exe ;; *) ext= ;; esac
+          bin=tissue$ext
           if [ "$RUNNER_OS" = Windows ]; then
             7z a "${{ matrix.archive }}" "$bin"
           else
