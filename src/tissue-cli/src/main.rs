@@ -14,6 +14,7 @@ use clap::{Parser, Subcommand};
 
 use tissue_core::git;
 use tissue_core::human::{valid_issue_id, IssueFile, IssueStatus};
+use tissue_core::releases::Releases;
 use tissue_core::state::Decision;
 use tissue_core::sync::{Actor, Core, Field, ProposalDraft};
 
@@ -151,6 +152,53 @@ enum Commands {
         #[arg(long, value_name = "ID", default_value = "human:local")]
         actor: String,
     },
+    /// Release subcommands: create / list / show / assign / cut.
+    Release {
+        #[command(subcommand)]
+        command: ReleaseCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum ReleaseCommands {
+    /// Create a new release (draft).
+    Create {
+        /// Release id, `v` + semver (e.g. `v1.2.0`).
+        id: String,
+        /// One-line release title.
+        title: String,
+        /// Release notes / goals text.
+        #[arg(long, value_name = "TEXT", default_value = "")]
+        body: String,
+        /// Human identity recorded in the commit.
+        #[arg(long, value_name = "ID", default_value = "human:local")]
+        actor: String,
+    },
+    /// List all releases.
+    List,
+    /// Print one release and its assigned issues (derived from front matter).
+    Show {
+        /// Release id, e.g. `v1.2.0`.
+        id: String,
+    },
+    /// Assign an issue to a release (writes the issue's `release` field).
+    Assign {
+        /// Issue id, e.g. `IAM-42`.
+        issue_id: String,
+        /// Release id, e.g. `v1.2.0`.
+        release_id: String,
+        /// Human identity recorded in the stream and commit.
+        #[arg(long, value_name = "ID", default_value = "human:local")]
+        actor: String,
+    },
+    /// Cut a release: status -> cut, close-out commit, git tag `v<id>`.
+    Cut {
+        /// Release id, e.g. `v1.2.0`.
+        id: String,
+        /// Human identity recorded in the stream and commit.
+        #[arg(long, value_name = "ID", default_value = "human:local")]
+        actor: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -267,7 +315,76 @@ fn run(cli: Cli) -> Result<(), String> {
             &actor,
         ),
         Commands::Serve { port } => serve_cmd(&repo, port),
+        Commands::Release { command } => release_cmd(&repo, command),
     }
+}
+
+fn release_cmd(repo: &Path, command: ReleaseCommands) -> Result<(), String> {
+    require_repo(repo)?;
+    let grepo = git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    let releases = Releases::new(grepo);
+    match command {
+        ReleaseCommands::Create {
+            id,
+            title,
+            body,
+            actor,
+        } => {
+            let author = actor_from(&actor).author;
+            releases
+                .create(&id, &title, &body, &now_utc(), &author)
+                .map_err(|e| format!("release create: {e}"))?;
+            println!("created release {id}: {title}");
+        }
+        ReleaseCommands::List => {
+            for rel in releases.list().map_err(|e| format!("release list: {e}"))? {
+                println!("{}\t{}\t{}", rel.id, rel.status.as_str(), rel.title);
+            }
+        }
+        ReleaseCommands::Show { id } => {
+            let rel = releases
+                .load(&id)
+                .map_err(|e| format!("release show: {e}"))?;
+            println!("id:      {}", rel.id);
+            println!("title:   {}", rel.title);
+            println!("status:  {}", rel.status.as_str());
+            if let Some(target) = &rel.target {
+                println!("target:  {target}");
+            }
+            println!("created: {}", rel.created);
+            println!("updated: {}", rel.updated);
+            let issues = releases
+                .assigned_issues(&id)
+                .map_err(|e| format!("release show: {e}"))?;
+            println!("issues:");
+            if issues.is_empty() {
+                println!("  (none assigned)");
+            }
+            for issue in issues {
+                println!("  {}\t{}\t{}", issue.id, issue.status.as_str(), issue.title);
+            }
+            println!("\n{}", rel.body);
+        }
+        ReleaseCommands::Assign {
+            issue_id,
+            release_id,
+            actor,
+        } => {
+            let actor = actor_from(&actor);
+            releases
+                .assign(&issue_id, &release_id, &now_utc(), &actor.author, &actor.id)
+                .map_err(|e| format!("release assign: {e}"))?;
+            println!("assigned {issue_id} -> {release_id}");
+        }
+        ReleaseCommands::Cut { id, actor } => {
+            let actor = actor_from(&actor);
+            releases
+                .cut(&id, &now_utc(), &actor.author, &actor.id)
+                .map_err(|e| format!("release cut: {e}"))?;
+            println!("cut {id}: status=cut, tag {id} created");
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

@@ -563,6 +563,27 @@ pub fn valid_release_id(id: &str) -> bool {
 }
 
 impl ReleaseFile {
+    /// Build a fresh draft release (created/updated = now).
+    pub fn new(id: &str, title: &str, body: &str, now: &str) -> Result<Self> {
+        if !valid_release_id(id) {
+            return Err(Error::Validation(format!("id `{id}` is not `v` + semver")));
+        }
+        Ok(ReleaseFile {
+            id: id.to_string(),
+            title: title.to_string(),
+            status: ReleaseStatus::Draft,
+            target: None,
+            created: now.to_string(),
+            updated: now.to_string(),
+            body: body.to_string(),
+            front: FrontMatter {
+                raw: None,
+                extra: serde_yaml::Mapping::new(),
+                dirty: true,
+            },
+        })
+    }
+
     pub fn validate_against_dir(&self, dir_name: &str) -> Result<()> {
         if self.id != dir_name {
             return Err(Error::Validation(format!(

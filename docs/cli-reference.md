@@ -178,3 +178,53 @@ tissue serve --port 8080
 | Flag | Meaning |
 |---|---|
 | `--port <N>` | Port to listen on (default `7323`) |
+
+---
+
+## `tissue release <SUBCOMMAND>`
+
+Release tracking over `.tissue/releases/<ver>/` (STATE.md decision 6):
+each release carries the dual format like an issue — `release.md` (human)
+plus an append-only `agent.jsonl` stream. The issue→release link lives
+in the issue's `release` front-matter field; per-release lists are
+derived from it, never stored twice.
+
+### `tissue release create <ID> <TITLE>`
+
+Create a new release (draft). `ID` is `v` + semver (e.g. `v1.2.0`).
+Writes: `.tissue/releases/<ID>/release.md`. Commits: exactly one,
+`release create <ID>: <TITLE>`.
+
+```sh
+tissue release create v1.2.0 "Second cut" --body "Goals and notes."
+```
+
+| Flag | Meaning |
+|---|---|
+| `--body <TEXT>` | Release notes / goals text (default: empty) |
+| `--actor <ID>` | Human identity recorded in the commit (default `human:local`) |
+
+### `tissue release list`
+
+List every release: id, status (`draft` / `cut`), title.
+
+### `tissue release show <ID>`
+
+Print one release's front matter and body, plus its assigned issues —
+derived from each issue's `release` front-matter field.
+
+### `tissue release assign <ISSUE_ID> <RELEASE_ID>`
+
+Assign an issue to a release: writes the `release` front-matter link on
+the issue and appends an `assignment` record to the release's stream.
+Commits: exactly one. Reassigning an issue that already has a release
+fails — clear the link first (an empty `--proposed ""` on the field via
+`propose`/`approve`).
+
+### `tissue release cut <ID>`
+
+Finalize a release: sets `status: cut` (close-out commit), appends a
+`release-cut` stream record, and creates the git tag — the release id
+*is* the tag name (`v1.2.0` id → `v1.2.0` tag; ids are `v`-prefixed by
+validation). Cutting an
+already-cut release fails. Commits: exactly one, `release cut <ID>`.
