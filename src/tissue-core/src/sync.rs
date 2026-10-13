@@ -367,6 +367,10 @@ impl Core {
     /// `tissue sync <id>`: write a `human-sync` record and commit.
     /// The agent reconciles from this record onward, never from raw diffs.
     pub fn sync(&self, issue_id: &str, actor: &Actor, now: &str, summary: &str) -> Result<String> {
+        let dir = self.issue_dir(issue_id)?;
+        if !dir.is_dir() {
+            return Err(Error::Proposal(format!("issue {issue_id} not found")));
+        }
         self.append_record(
             issue_id,
             json!({
@@ -785,6 +789,18 @@ mod tests {
         let subjects = String::from_utf8_lossy(&log.stdout);
         assert!(subjects.contains("propose IAM-1/prop-01: status open -> in-progress"));
         assert!(subjects.contains("approve IAM-1/prop-01: open -> in-progress"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_on_nonexistent_issue_fails_without_side_effects() {
+        let (dir, core) = temp_core();
+        let err = core
+            .sync("IAM-999", &human_actor(), "2026-10-08T12:00:00Z", "s")
+            .unwrap_err();
+        assert!(err.to_string().contains("IAM-999 not found"));
+        assert!(core.read_stream("IAM-999").unwrap().is_empty());
+        assert!(!core.issue_dir("IAM-999").unwrap().exists());
         let _ = fs::remove_dir_all(&dir);
     }
 
