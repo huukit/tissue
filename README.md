@@ -60,16 +60,25 @@ Three skins over one core, so humans and agents always see the same truth:
 
 ## Status
 
-Early stage — product spec and decisions are settled, implementation is just beginning. The product state lives in [`operations/product-owner/STATE.md`](operations/product-owner/STATE.md), the roadmap in [`operations/project/ROADMAP.md`](operations/project/ROADMAP.md). Planned stack: Rust core/CLI/API, TypeScript GUI. Current milestone: the [PoC dogfood switch](https://github.com/huukit/tissue/issues/3) — run tissue's own issues in tissue.
+Early but working PoC. Shipped so far: the `tissue-core` library and CLI
+(full sync/proposal/approval loop), `tissue serve` — a read-only,
+loopback-only issue viewer with the GUI assets embedded in the binary — a
+tag-triggered release workflow (`v0.1.0` built green on all three release
+platforms), and a container image path. Licensed GPL-3.0-only. The product state lives in [`operations/product-owner/STATE.md`](operations/product-owner/STATE.md), the roadmap in [`operations/project/ROADMAP.md`](operations/project/ROADMAP.md). Planned stack: Rust core/CLI/API, TypeScript GUI. Current milestone: the [PoC dogfood switch](https://github.com/huukit/tissue/issues/3) — run tissue's own issues in tissue.
 
 ## Getting started — standalone
 
-Two commands and a browser. The release binary is fully static (musl); no Rust
+Two commands and a browser. The Linux release binary is fully static
+(musl); no Rust
 toolchain, no node, no server dependencies.
 
 1. **Get the binary** — download `tissue` from the
-   [releases page](https://github.com/huukit/tissue/releases) (static Linux
-   x86_64), or build from source: `cd src && cargo build --release`
+   [releases page](https://github.com/huukit/tissue/releases) for your
+   platform: `tissue-x86_64-unknown-linux-musl.tar.gz` (Linux x86_64, fully
+   static musl build), `tissue-x86_64-pc-windows-msvc.zip` (Windows x86_64),
+   or `tissue-aarch64-apple-darwin.tar.gz` (macOS arm64) — each archive
+   ships a `.sha256` sidecar. Or build from source:
+   `cd src && cargo build --release`
 2. **Bootstrap a project** — `tissue init --from-github huukit/tissue`
    creates `tissue-issues/` with this repo's own issues imported (via `gh`;
    run `gh auth login` first), or `tissue init --remote /path/to/remote` for a
