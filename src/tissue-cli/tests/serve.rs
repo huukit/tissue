@@ -125,24 +125,52 @@ fn start_server(repo: &Scratch) -> Server {
 }
 
 /// One raw HTTP request; returns (status_line, headers, body).
+///
+/// Retries with backoff: under parallel test load the first connect or the
+/// status read can fail transiently (refused/reset), which used to flake CI.
 fn http(addr: &SocketAddr, request: &str) -> (String, String, String) {
-    let mut stream = TcpStream::connect(addr).expect("connect");
-    stream.write_all(request.as_bytes()).expect("write request");
+    let mut last_err = None;
+    for attempt in 0..10 {
+        match http_once(addr, request) {
+            Ok(r) => return r,
+            Err(e) => {
+                last_err = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(25 * (attempt + 1)));
+            }
+        }
+    }
+    panic!("request to {addr} failed after retries: {:?}", last_err);
+}
+
+fn http_once(addr: &SocketAddr, request: &str) -> Result<(String, String, String), String> {
+    let mut stream = TcpStream::connect(addr).map_err(|e| format!("connect: {e}"))?;
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| format!("write request: {e}"))?;
     let mut reader = BufReader::new(stream);
     let mut status = String::new();
-    reader.read_line(&mut status).expect("read status");
+    reader
+        .read_line(&mut status)
+        .map_err(|e| format!("read status: {e}"))?;
+    if status.is_empty() {
+        return Err("empty status line".to_string());
+    }
     let mut headers = String::new();
     loop {
         let mut line = String::new();
-        reader.read_line(&mut line).expect("read header");
+        reader
+            .read_line(&mut line)
+            .map_err(|e| format!("read header: {e}"))?;
         if line.trim().is_empty() {
             break;
         }
         headers.push_str(&line);
     }
     let mut body = String::new();
-    reader.read_line(&mut body).expect("read body");
-    (status, headers, body)
+    reader
+        .read_line(&mut body)
+        .map_err(|e| format!("read body: {e}"))?;
+    Ok((status, headers, body))
 }
 
 fn get(addr: &SocketAddr, path: &str) -> (String, String) {

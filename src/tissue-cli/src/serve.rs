@@ -4,7 +4,7 @@
 //! a small JSON API plus static files for the GUI. GET-only, 127.0.0.1-only:
 //! no mutating controls, no public exposure (AGENTS.md §5).
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 
@@ -62,7 +62,11 @@ fn handle(mut stream: TcpStream, repo: &Path, gui_root: &Path) -> Result<(), Str
     let mut parts = line.split_whitespace();
     let method = parts.next().unwrap_or("").to_string();
     let target = parts.next().unwrap_or("/").to_string();
-    // Drain headers (until empty line) so the connection is reusable.
+    // Drain headers (until empty line) so the connection is reusable,
+    // tracking Content-Length so the request body can be drained too —
+    // closing with an undrained body sends a TCP RST that can destroy the
+    // queued response on the client side.
+    let mut content_length: u64 = 0;
     loop {
         let mut h = String::new();
         let n = reader
@@ -71,6 +75,19 @@ fn handle(mut stream: TcpStream, repo: &Path, gui_root: &Path) -> Result<(), Str
         if n == 0 || h.trim().is_empty() {
             break;
         }
+        if let Some(v) = h
+            .to_ascii_lowercase()
+            .strip_prefix("content-length:")
+            .and_then(|v| v.trim().parse().ok())
+        {
+            content_length = v;
+        }
+    }
+    if content_length > 0 {
+        let mut body = vec![0u8; content_length as usize];
+        reader
+            .read_exact(&mut body)
+            .map_err(|e| format!("body: {e}"))?;
     }
     let path = target.split('?').next().unwrap_or("/").to_string();
 
