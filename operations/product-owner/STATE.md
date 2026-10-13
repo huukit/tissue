@@ -36,6 +36,8 @@ Tissue is a place where humans and AI build things together, without drowning ea
 | 5 | **Three interfaces over one core.** CLI (humans + agents, ships first), REST API (agents/remote), GUI (review, sync button lives here). All are thin layers over a single core library; no interface implements business logic. |
 | 6 | **Releases are first-class.** Releases live in `.tissue/releases/<ver>/` with the same dual format. Issue→release link is a front-matter field on the issue (source of truth); per-release lists are derived. Cutting a release = git tag + close-out commit. Agents can propose release-note drafts and readiness reports. |
 | 7 | **Implementation language: Rust.** Core, CLI, and API in one Rust workspace; GUI in TypeScript as a pure API client. |
+| 8 | **License: GPL-3.0-only.** Copyleft (#51). The full license text is `LICENSE` at the repo root; the Cargo workspace declares `GPL-3.0-only`. |
+| 9 | **CI on GitHub-hosted runners.** Standard `ubuntu-latest`/`windows-latest`/`macos-latest` labels — free and unlimited for public repos. The self-hosted runner interlude (#47) was reverted once this was confirmed (#52). |
 
 ## Implementation direction
 
