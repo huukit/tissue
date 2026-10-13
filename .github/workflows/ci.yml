@@ -31,6 +31,19 @@ jobs:
             python3 -c "import sys, yaml; yaml.safe_load(open(sys.argv[1]))" "$f" || { echo "::error::$f is not valid YAML"; exit 1; }
           done
 
+  deploy-scripts:
+    name: deploy scripts (bash syntax + shellcheck)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: bash -n on deploy scripts
+        run: bash -n deploy/tissue-upgrade.sh
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck deploy/tissue-upgrade.sh
+
   rust:
     name: fmt / check / clippy / test / audit / gui tsc
     runs-on: ubuntu-24.04

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run tissue-upgrade periodically
+
+[Timer]
+# Poll every 15 minutes; the service is idempotent (no-op when current).
+OnBootSec=2min
+OnUnitActiveSec=15min
+
+[Install]
+WantedBy=timers.target

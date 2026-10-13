@@ -1,0 +1,17 @@
+[Unit]
+Description=tissue upgrade: poll latest GitHub Release and swap the binary
+Documentation=https://github.com/huukit/tissue
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The upgrade script runs as a dedicated user that can write the binary
+# location and control tissue.service. If you prefer, run it as root and
+# drop the User/Group lines.
+Environment=TISSUE_REPO_SLUG=huukit/tissue
+Environment=TISSUE_BIN_DIR=/usr/local/bin
+ExecStart=/usr/local/lib/tissue/tissue-upgrade.sh
+
+[Install]
+WantedBy=multi-user.target

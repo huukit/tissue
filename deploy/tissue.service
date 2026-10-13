@@ -1,0 +1,29 @@
+[Unit]
+Description=tissue read-only issue viewer (loopback only)
+Documentation=https://github.com/huukit/tissue
+After=network.target
+
+[Service]
+Type=simple
+# One-time setup: copy this file to /etc/systemd/system/ and edit the
+# Environment lines for your box, then `systemctl daemon-reload`.
+#
+# TISSUE_REPO  path to the tissue issue repository (the directory containing
+#              .tissue/) — NOT the code checkout.
+# TISSUE_BIN   path to the tissue binary (managed by tissue-upgrade).
+# TISSUE_PORT  port for the loopback viewer (default 7323).
+Environment=TISSUE_REPO=/srv/tissue-issues
+Environment=TISSUE_BIN=/usr/local/bin/tissue
+Environment=TISSUE_PORT=7323
+ExecStart=${TISSUE_BIN} serve --repo ${TISSUE_REPO} --port ${TISSUE_PORT}
+Restart=on-failure
+RestartSec=5
+
+# Hardening: the viewer is read-only and loopback-only; keep it that way.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
