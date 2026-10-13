@@ -25,7 +25,12 @@ fn releases_dir(repo: &Path) -> PathBuf {
     tissue_dir(repo).join("releases")
 }
 
-pub fn serve(repo: PathBuf, port: u16, gui_root: PathBuf) -> Result<(), String> {
+pub fn serve(
+    repo: PathBuf,
+    port: u16,
+    gui_root: PathBuf,
+    project_prefix: Option<&str>,
+) -> Result<(), String> {
     if !tissue_dir(&repo).is_dir() {
         return Err(format!(
             "not a tissue repository (no `{}` in {})",
@@ -36,14 +41,18 @@ pub fn serve(repo: PathBuf, port: u16, gui_root: PathBuf) -> Result<(), String> 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
     let listener = TcpListener::bind(addr).map_err(|e| format!("binding {addr}: {e}"))?;
     println!(
-        "tissue viewer (read-only) on http://{addr}/ — repo: {}",
-        repo.display()
+        "tissue viewer (read-only) on http://{addr}/ — repo: {}{}",
+        repo.display(),
+        match project_prefix {
+            Some(p) => format!(" (project prefix {p})"),
+            None => String::new(),
+        }
     );
     println!("press Ctrl-C to stop");
     for stream in listener.incoming() {
         match stream {
             Ok(s) => {
-                if let Err(e) = handle(s, &repo, &gui_root) {
+                if let Err(e) = handle(s, &repo, &gui_root, project_prefix) {
                     eprintln!("warning: request failed: {e}");
                 }
             }
@@ -53,7 +62,12 @@ pub fn serve(repo: PathBuf, port: u16, gui_root: PathBuf) -> Result<(), String> 
     Ok(())
 }
 
-fn handle(mut stream: TcpStream, repo: &Path, gui_root: &Path) -> Result<(), String> {
+fn handle(
+    mut stream: TcpStream,
+    repo: &Path,
+    gui_root: &Path,
+    project_prefix: Option<&str>,
+) -> Result<(), String> {
     let mut reader = BufReader::new(&mut stream);
     let mut line = String::new();
     reader
@@ -101,7 +115,7 @@ fn handle(mut stream: TcpStream, repo: &Path, gui_root: &Path) -> Result<(), Str
     }
 
     if let Some(rest) = path.strip_prefix("/api/") {
-        return api_route(&mut stream, rest, repo);
+        return api_route(&mut stream, rest, repo, project_prefix);
     }
     static_route(&mut stream, &path, gui_root)
 }
@@ -110,10 +124,15 @@ fn handle(mut stream: TcpStream, repo: &Path, gui_root: &Path) -> Result<(), Str
 // API
 // ---------------------------------------------------------------------------
 
-fn api_route(stream: &mut TcpStream, rest: &str, repo: &Path) -> Result<(), String> {
+fn api_route(
+    stream: &mut TcpStream,
+    rest: &str,
+    repo: &Path,
+    project_prefix: Option<&str>,
+) -> Result<(), String> {
     let rest = rest.trim_matches('/');
     if rest == "issues" {
-        return api_issues(stream, repo);
+        return api_issues(stream, repo, project_prefix);
     }
     if let Some(id) = rest.strip_prefix("issues/") {
         return api_issue_detail(stream, repo, id);
@@ -124,7 +143,7 @@ fn api_route(stream: &mut TcpStream, rest: &str, repo: &Path) -> Result<(), Stri
     respond_json(stream, 404, "{\"error\":\"unknown api route\"}")
 }
 
-fn scan_issues(repo: &Path) -> Vec<IssueFile> {
+fn scan_issues(repo: &Path, project_prefix: Option<&str>) -> Vec<IssueFile> {
     let mut issues = Vec::new();
     let Ok(rd) = std::fs::read_dir(issues_dir(repo)) else {
         return issues;
@@ -135,6 +154,11 @@ fn scan_issues(repo: &Path) -> Vec<IssueFile> {
             continue;
         }
         if let Ok(issue) = IssueFile::from_path(&path.join("issue.md")) {
+            if let Some(p) = project_prefix {
+                if !issue.id.starts_with(&format!("{p}-")) {
+                    continue;
+                }
+            }
             issues.push(issue);
         }
     }
@@ -158,8 +182,12 @@ fn issue_summary_json(issue: &IssueFile) -> String {
     )
 }
 
-fn api_issues(stream: &mut TcpStream, repo: &Path) -> Result<(), String> {
-    let issues = scan_issues(repo);
+fn api_issues(
+    stream: &mut TcpStream,
+    repo: &Path,
+    project_prefix: Option<&str>,
+) -> Result<(), String> {
+    let issues = scan_issues(repo, project_prefix);
     let items: Vec<String> = issues.iter().map(issue_summary_json).collect();
     let body = format!("{{\"issues\":[{}]}}", items.join(","));
     respond_json(stream, 200, &body)

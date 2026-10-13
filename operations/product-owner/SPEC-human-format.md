@@ -4,6 +4,22 @@ Status: draft for #2 · Owner: Product Owner
 
 The human format is the editorial record: small, stable, trusted. It is only ever mutated by direct human edit or approval of an AI proposal (STATE.md, core loop rule 1).
 
+## Projects and config.yml
+
+A repo may hold several projects: a **project** is a named grouping of issue-id
+prefixes (`IAM`, `VER`, …). The mapping lives in `.tissue/config.yml`, written by
+`tissue init` and extendable by hand:
+
+```yaml
+project: e2e
+projects:
+  e2e: IAM
+  second: VER
+```
+
+`--project <name>` filters on `tissue list` and `tissue serve` resolve the name
+to its prefix here; an issue's project is simply its id prefix. No schema change.
+
 ## File layout
 
 One Markdown file per unit of work, with YAML front matter:

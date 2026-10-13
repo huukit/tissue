@@ -71,7 +71,12 @@ pub fn run(repo_root: &Path, opts: &InitOptions) -> Result<(), String> {
         ));
     }
 
-    init_issue_repo(&issue_repo, &project, opts.remote.as_deref())?;
+    init_issue_repo(
+        &issue_repo,
+        &project,
+        &opts.id_prefix,
+        opts.remote.as_deref(),
+    )?;
 
     if let Some(gh_repo) = &opts.from_github {
         import_github(gh_repo, &issue_repo, &opts.id_prefix)?;
@@ -113,7 +118,12 @@ fn default_project_name(repo_root: &Path) -> String {
         .unwrap_or_else(|| "myproject".to_string())
 }
 
-fn init_issue_repo(root: &Path, project: &str, remote: Option<&Path>) -> Result<(), String> {
+fn init_issue_repo(
+    root: &Path,
+    project: &str,
+    id_prefix: &str,
+    remote: Option<&Path>,
+) -> Result<(), String> {
     std::fs::create_dir_all(root).map_err(|e| format!("creating {}: {e}", root.display()))?;
     let grepo = Repo::init(root).map_err(|e| format!("initializing repository: {e}"))?;
 
@@ -121,9 +131,10 @@ fn init_issue_repo(root: &Path, project: &str, remote: Option<&Path>) -> Result<
         .map(|r| format!("remote: {}\n", escape_remote(r)))
         .unwrap_or_default();
     let config = format!(
-        "# Tissue configuration.\nproject: {project}\n{remote_line}# Timestamps are RFC3339 UTC, e.g. 2026-10-08T09:00:00Z\n",
+        "# Tissue configuration.\nproject: {project}\n{remote_line}# Projects: named groupings of issue-id prefixes (#79).\nprojects:\n  {project}: {id_prefix}\n# Timestamps are RFC3339 UTC, e.g. 2026-10-08T09:00:00Z\n",
         project = yaml_scalar(project),
         remote_line = remote_line,
+        id_prefix = yaml_scalar(id_prefix),
     );
     let config_path = root.join(".tissue").join("config.yml");
     std::fs::write(&config_path, config).map_err(|e| format!("writing config.yml: {e}"))?;

@@ -79,6 +79,13 @@ enum Commands {
         /// Show only issues with these statuses (open, in-progress, closed).
         #[arg(long, value_name = "STATUS")]
         status: Vec<String>,
+        /// Show only issues of one project (name mapped to an id prefix
+        /// in `.tissue/config.yml`, e.g. `iam` -> `IAM`).
+        #[arg(long, value_name = "NAME", conflicts_with = "all")]
+        project: Option<String>,
+        /// Explicitly list every issue in the repo, all projects.
+        #[arg(long)]
+        all: bool,
     },
     /// Print one issue: front matter fields and body.
     Show {
@@ -137,6 +144,10 @@ enum Commands {
         /// Port to listen on (default 7323).
         #[arg(long, value_name = "N")]
         port: Option<u16>,
+        /// Show only issues of one project (name mapped to an id prefix
+        /// in `.tissue/config.yml`, e.g. `iam` -> `IAM`).
+        #[arg(long, value_name = "NAME")]
+        project: Option<String>,
     },
     /// Reject a pending proposal: records the reason so agents can learn
     /// from it, and clears `needs-review`.
@@ -285,7 +296,11 @@ fn run(cli: Cli) -> Result<(), String> {
             },
         ),
         Commands::Create { id, title, body } => create(&repo, &id, &title, body),
-        Commands::List { status } => list(&repo, &status),
+        Commands::List {
+            status,
+            project,
+            all,
+        } => list(&repo, &status, project.as_deref(), all),
         Commands::Show { id } => show(&repo, &id),
         Commands::Sync { id, summary, actor } => sync_cmd(&repo, &id, &summary, &actor),
         Commands::Propose {
@@ -314,7 +329,7 @@ fn run(cli: Cli) -> Result<(), String> {
             Some(&reason),
             &actor,
         ),
-        Commands::Serve { port } => serve_cmd(&repo, port),
+        Commands::Serve { port, project } => serve_cmd(&repo, port, project.as_deref()),
         Commands::Release { command } => release_cmd(&repo, command),
     }
 }
@@ -561,11 +576,55 @@ fn edit_body(template: &str) -> Result<String, String> {
     Ok(text)
 }
 
-fn list(repo: &Path, status_filter: &[String]) -> Result<(), String> {
+/// Resolve a project name to its issue-id prefix via `.tissue/config.yml`.
+/// Returns the prefix (e.g. `IAM`) or a clear error.
+fn project_prefix(repo: &Path, name: &str) -> Result<String, String> {
+    let config = std::fs::read_to_string(tissue_dir(repo).join("config.yml"))
+        .map_err(|e| format!("reading config.yml: {e}"))?;
+    let key = format!("{name}:");
+    let mut in_projects = false;
+    for line in config.lines() {
+        let trimmed = line.trim_start();
+        if line.starts_with("projects:") {
+            in_projects = true;
+            continue;
+        }
+        if in_projects {
+            if trimmed.starts_with('#') || trimmed.is_empty() {
+                continue;
+            }
+            if !line.starts_with(' ') {
+                in_projects = false;
+                continue;
+            }
+            if let Some(rest) = trimmed.strip_prefix(&key) {
+                let prefix = rest.trim().trim_matches('"');
+                if !prefix.is_empty() {
+                    return Ok(prefix.to_string());
+                }
+            }
+        }
+    }
+    Err(format!(
+        "unknown project `{name}`: no mapping in config.yml"
+    ))
+}
+
+fn list(
+    repo: &Path,
+    status_filter: &[String],
+    project: Option<&str>,
+    all: bool,
+) -> Result<(), String> {
     require_repo(repo)?;
     for f in status_filter {
         parse_status(f)?;
     }
+    let prefix = match project {
+        Some(name) => Some(project_prefix(repo, name)?),
+        None => None,
+    };
+    let _ = all; // listing every project is the default; --all makes it explicit
     let dir = issues_dir(repo);
     let mut entries: Vec<_> = match std::fs::read_dir(&dir) {
         Ok(rd) => rd
@@ -588,6 +647,11 @@ fn list(repo: &Path, status_filter: &[String]) -> Result<(), String> {
             eprintln!("warning: skipping unreadable issue directory {name}");
             continue;
         };
+        if let Some(p) = &prefix {
+            if !name.starts_with(&format!("{p}-")) {
+                continue;
+            }
+        }
         if !status_filter.is_empty()
             && !status_filter
                 .iter()
@@ -658,10 +722,14 @@ fn show(repo: &Path, id: &str) -> Result<(), String> {
 }
 
 /// `tissue serve`: read-only loopback viewer wrapping the core scan (#30).
-fn serve_cmd(repo: &Path, port: Option<u16>) -> Result<(), String> {
+fn serve_cmd(repo: &Path, port: Option<u16>, project: Option<&str>) -> Result<(), String> {
     let port = port.unwrap_or(serve::DEFAULT_PORT);
+    let prefix = match project {
+        Some(name) => Some(project_prefix(repo, name)?),
+        None => None,
+    };
     let gui_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../gui");
-    serve::serve(repo.to_path_buf(), port, gui_root)
+    serve::serve(repo.to_path_buf(), port, gui_root, prefix.as_deref())
 }
 
 #[cfg(test)]

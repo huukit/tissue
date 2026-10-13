@@ -71,6 +71,8 @@ List issues; issues awaiting review are flagged `NEEDS REVIEW`.
 ```sh
 tissue list
 tissue list --status open
+tissue list --project iam
+tissue list --all
 ```
 
 Read-only.
@@ -78,6 +80,29 @@ Read-only.
 | Flag | Meaning |
 |---|---|
 | `--status <STATUS>` | Show only issues with these statuses (`open`, `in-progress`, `closed`) — the full `status` enum; an issue's `status` front-matter field accepts the same three values |
+| `--project <NAME>` | Show only issues of one project — a name mapped to an issue-id prefix in `.tissue/config.yml` (see below); unknown names fail with a clear error |
+| `--all` | Explicitly list every issue in the repo, across all projects (listing all projects is already the default) |
+
+---
+
+## Projects (multi-project repos)
+
+A repo can hold several projects at once: a **project** is a named grouping of
+issue-id prefixes (`IAM`, `VER`, …). The mapping lives in `.tissue/config.yml`,
+written by `tissue init` (the init prefix becomes the first project) and
+extendable by hand:
+
+```yaml
+project: e2e
+projects:
+  e2e: IAM
+  second: VER
+```
+
+`tissue list --project <name>` and `tissue serve --project <name>` filter by
+that prefix; `tissue list --all` lists everything. The default project name
+from `init --project <NAME>` doubles as the first key. No schema change: an
+issue's project is simply its id prefix.
 
 ---
 
@@ -173,6 +198,7 @@ cannot be exposed to the network.** Stop it with Ctrl-C.
 ```sh
 tissue serve                 # http://127.0.0.1:7323
 tissue serve --port 8080
+tissue serve --project iam   # filtered viewer
 ```
 
 | Flag | Meaning |
@@ -228,3 +254,4 @@ Finalize a release: sets `status: cut` (close-out commit), appends a
 *is* the tag name (`v1.2.0` id → `v1.2.0` tag; ids are `v`-prefixed by
 validation). Cutting an
 already-cut release fails. Commits: exactly one, `release cut <ID>`.
+| `--project <NAME>` | Filter the viewer to one project (name → id prefix from `.tissue/config.yml`); the issues list and detail routes show only that project's issues |

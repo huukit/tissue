@@ -308,3 +308,75 @@ fn show_and_create_validate_input() {
     let out = repo.tissue(&["show", "IAM-999"]);
     Repo::assert_failure(&out, "unknown issue must fail");
 }
+#[test]
+fn multi_project_filters_and_full_loop() {
+    let repo = Repo::new("multi-project");
+    let out = repo.tissue(&["init", "--project", "e2e"]);
+    Repo::assert_success(&out, "tissue init --project");
+    // AC5 graceful default: the projects map exists from init; a second
+    // project is added to config.yml the way a user would.
+    let cfg_path = repo.root.join(".tissue/config.yml");
+    let cfg = std::fs::read_to_string(&cfg_path).expect("read config.yml");
+    assert!(cfg.contains("projects:"), "init writes the projects map");
+    let cfg2 = format!("{cfg}  second: VER\n");
+    std::fs::write(&cfg_path, cfg2).expect("extend config.yml");
+
+    // AC1: two prefixes coexist; the full loop works per-prefix.
+    create(&repo, "IAM-1", "identity issue");
+    create(&repo, "VER-1", "verification issue");
+    for (id, title) in [("IAM-1", "identity issue"), ("VER-1", "verification issue")] {
+        let out = repo.tissue(&["show", id]);
+        Repo::assert_success(&out, "show per-prefix");
+        assert!(Repo::stdout(&out).contains(title), "show {id}");
+    }
+
+    // AC2: --project filter and --all.
+    let out = repo.tissue(&["list", "--project", "e2e"]);
+    Repo::assert_success(&out, "list --project");
+    let iam_list = Repo::stdout(&out);
+    assert!(
+        iam_list.contains("IAM-1") && !iam_list.contains("VER-1"),
+        "{iam_list}"
+    );
+    let out = repo.tissue(&["list", "--project", "second"]);
+    Repo::assert_success(&out, "list --project second");
+    let ver_list = Repo::stdout(&out);
+    assert!(
+        ver_list.contains("VER-1") && !ver_list.contains("IAM-1"),
+        "{ver_list}"
+    );
+    let out = repo.tissue(&["list", "--all"]);
+    Repo::assert_success(&out, "list --all");
+    let all = Repo::stdout(&out);
+    assert!(all.contains("IAM-1") && all.contains("VER-1"), "{all}");
+    // unknown project name: clear error
+    let out = repo.tissue(&["list", "--project", "nope"]);
+    Repo::assert_failure(&out, "unknown project must fail");
+
+    // AC4: approve one proposal from each project — full loop on both.
+    let mut ids = Vec::new();
+    for id in ["IAM-1", "VER-1"] {
+        let out = repo.tissue(&[
+            "propose",
+            id,
+            "--field",
+            "status",
+            "--current",
+            "open",
+            "--proposed",
+            "in-progress",
+            "--rationale",
+            "e2e",
+            "--actor",
+            "agent:e2e",
+        ]);
+        Repo::assert_success(&out, "propose {id}");
+        ids.push(proposal_id_from(&out));
+    }
+    for (id, pid) in [("IAM-1", ids[0].clone()), ("VER-1", ids[1].clone())] {
+        let out = repo.tissue(&["approve", id, &pid, "--actor", "human:e2e"]);
+        Repo::assert_success(&out, "approve {id}");
+        let issue = repo.read_issue(id);
+        assert!(issue.contains("in-progress"), "applied to {id}");
+    }
+}
