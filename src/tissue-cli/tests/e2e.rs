@@ -113,8 +113,22 @@ fn proposal_id_from(out: &Output) -> String {
 fn full_dogfood_loop_e2e() {
     let repo = Repo::new("full-loop");
     init(&repo);
+    let after_init = repo.commit_count();
     create(&repo, "IAM-1", "First issue");
     create(&repo, "IAM-2", "Second issue");
+    assert_eq!(
+        repo.commit_count(),
+        after_init + 2,
+        "create = exactly one commit per issue"
+    );
+    let log = repo.git(&["log", "--oneline"]);
+    assert!(log.contains("create IAM-1: First issue"), "log: {log}");
+    assert!(log.contains("create IAM-2: Second issue"), "log: {log}");
+    let status = repo.git(&["status", "--porcelain"]);
+    assert!(
+        status.trim().is_empty(),
+        "clean tree after create: {status}"
+    );
 
     // list: both issues visible, no review flags
     let list = Repo::stdout(&repo.tissue(&["list"]));
@@ -126,6 +140,11 @@ fn full_dogfood_loop_e2e() {
     let out = repo.tissue(&["sync", "IAM-1", "--summary", "human edit"]);
     Repo::assert_success(&out, "tissue sync");
     assert_eq!(repo.commit_count(), before + 1, "sync = exactly one commit");
+    let sync_log = repo.git(&["log", "-1", "--oneline"]);
+    assert!(
+        sync_log.starts_with(|c: char| c.is_ascii_hexdigit()) && sync_log.contains("sync IAM-1"),
+        "sync commit is its own commit, not absorbing creation: {sync_log}"
+    );
     let stream = repo.agent_stream("IAM-1");
     assert!(stream.contains("\"type\":\"human-sync\""));
     assert!(stream.contains("human edit"));

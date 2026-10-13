@@ -416,6 +416,14 @@ fn create(repo: &Path, id: &str, title: &str, body: Option<String>) -> Result<()
     issue
         .write(&dir.join("issue.md"))
         .map_err(|e| format!("writing issue.md: {e}"))?;
+    let grepo = git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    let author = git::Author {
+        name: "tissue".to_string(),
+        email: "tissue@localhost".to_string(),
+    };
+    grepo
+        .commit_all(&author, &format!("create {id}: {title}"))
+        .map_err(|e| format!("committing issue: {e}"))?;
     println!("created {id}: {title}");
     Ok(())
 }
