@@ -17,6 +17,20 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  workflows:
+    name: workflow files parse as YAML
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Parse every workflow file
+        run: |
+          sudo apt-get install -y -qq python3-yaml >/dev/null
+          for f in .github/workflows/*.yml; do
+            echo "checking $f"
+            python3 -c "import sys, yaml; yaml.safe_load(open(sys.argv[1]))" "$f" || { echo "::error::$f is not valid YAML"; exit 1; }
+          done
+
   rust:
     name: fmt / check / clippy / test / audit / gui tsc
     runs-on: ubuntu-24.04
