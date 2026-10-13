@@ -30,7 +30,7 @@ jobs:
             archive: tissue-aarch64-apple-darwin.tar.gz
     steps:
       - uses: actions/checkout@v5
-      - name: Version guard: tag must match workspace version
+      - name: "Version guard: tag must match workspace version"
         working-directory: src
         shell: bash
         run: |
