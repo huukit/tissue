@@ -88,17 +88,24 @@ impl Drop for Server {
 }
 
 fn start_server(repo: &Scratch) -> Server {
+    start_server_with_env(repo, &[])
+}
+
+/// Start serve with extra environment pairs (e.g. TISSUE_API_TOKEN).
+fn start_server_with_env(repo: &Scratch, env: &[(&str, &str)]) -> Server {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("reserve port");
     let port = listener.local_addr().expect("addr").port();
     drop(listener);
     let exe: PathBuf = env!("CARGO_BIN_EXE_tissue").into();
-    let mut child = Command::new(exe)
-        .args(["serve", "--port", &port.to_string()])
+    let mut cmd = Command::new(exe);
+    cmd.args(["serve", "--port", &port.to_string()])
         .current_dir(&repo.root)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn tissue serve");
+        .stderr(Stdio::piped());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().expect("spawn tissue serve");
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     for _ in 0..100 {
         if TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50)).is_ok() {
@@ -345,4 +352,51 @@ fn propose_via_api_fails_safe_on_stale_current() {
     );
     let issue = std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-1/issue.md")).unwrap();
     assert!(issue.contains("First"), "human format untouched: {issue}");
+}
+
+/// TISSUE_API_TOKEN env var takes precedence over (and works without)
+/// config.yml (#80 token-storage fix): untracked, deployment-friendly.
+#[test]
+fn env_var_token_authenticates_without_config() {
+    let repo = Scratch::new("env-token");
+    // No api_token in config.yml at all.
+    let server = start_server_with_env(&repo, &[("TISSUE_API_TOKEN", "env-secret")]);
+
+    // Wrong token still 401; token never echoed.
+    let (status, _, body) = post(
+        &server.addr,
+        "/api/issues",
+        r#"{"id":"IAM-1","title":"x"}"#,
+        Some("wrong"),
+    );
+    assert!(status.contains("401"), "wrong env token: {status}");
+    assert!(
+        !body.contains("env-secret"),
+        "token never in response: {body}"
+    );
+
+    // Correct env token authenticates and commits.
+    let before = repo.commit_count();
+    let (status, _, body) = post(
+        &server.addr,
+        "/api/issues",
+        r#"{"id":"IAM-1","title":"Env created","actor":"agent:dev-1"}"#,
+        Some("env-secret"),
+    );
+    assert!(
+        status.contains("201"),
+        "env token create: {status} body: {body}"
+    );
+    assert_eq!(
+        repo.commit_count(),
+        before + 1,
+        "env-token write = one commit"
+    );
+
+    // Reads stay tokenless.
+    let (status, body) = get(&server.addr, "/api/issues");
+    assert!(
+        status.contains("200") && body.contains("IAM-1"),
+        "read: {status}"
+    );
 }

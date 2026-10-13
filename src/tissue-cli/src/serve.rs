@@ -192,6 +192,17 @@ fn api_route(
 /// The repo's API token, read from `.tissue/config.yml` (`api_token:`).
 /// Absent/empty means the write API is disabled.
 fn api_token(repo: &Path) -> Option<String> {
+    // TISSUE_API_TOKEN env var first: untracked, deployment-friendly
+    // (e.g. the systemd unit's Environment= line).
+    if let Ok(env_token) = std::env::var("TISSUE_API_TOKEN") {
+        let t = env_token.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    // Fallback: api_token: in .tissue/config.yml (git-tracked — a real
+    // token there lands in history; documented trade-off, see
+    // docs/cli-reference.md).
     let config = std::fs::read_to_string(tissue_dir(repo).join("config.yml")).ok()?;
     let line = config
         .lines()

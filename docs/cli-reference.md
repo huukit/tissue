@@ -255,3 +255,18 @@ Finalize a release: sets `status: cut` (close-out commit), appends a
 validation). Cutting an
 already-cut release fails. Commits: exactly one, `release cut <ID>`.
 | `--project <NAME>` | Filter the viewer to one project (name → id prefix from `.tissue/config.yml`); the issues list and detail routes show only that project's issues |
+
+### API token storage
+
+The write API's token is resolved in this order:
+
+1. **`TISSUE_API_TOKEN` environment variable** (recommended): untracked
+   by git, deployment-friendly — e.g. the systemd unit's `Environment=`
+   line sets it on the testing machine.
+2. **`api_token:` in `.tissue/config.yml`** (fallback): the config file
+   is git-tracked, so a real token there lands permanently in the issue
+   repo's history. Use this only for local, throwaway, or public-test
+   repos, or with a token you are willing to rotate.
+
+Absent/empty in both places means the write API is disabled (explicit
+503 on every write attempt).
