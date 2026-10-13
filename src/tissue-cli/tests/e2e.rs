@@ -110,6 +110,19 @@ fn proposal_id_from(out: &Output) -> String {
 }
 
 #[test]
+fn version_reports_workspace_version() {
+    let repo = Repo::new("version");
+    let out = repo.tissue(&["--version"]);
+    Repo::assert_success(&out, "tissue --version");
+    let expected = concat!(env!("CARGO_PKG_VERSION"));
+    assert!(
+        Repo::stdout(&out).contains(expected),
+        "--version must contain the workspace version {expected}: {}",
+        Repo::stdout(&out)
+    );
+}
+
+#[test]
 fn full_dogfood_loop_e2e() {
     let repo = Repo::new("full-loop");
     init(&repo);

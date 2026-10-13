@@ -30,6 +30,16 @@ jobs:
             archive: tissue-aarch64-apple-darwin.tar.gz
     steps:
       - uses: actions/checkout@v5
+      - name: Version guard: tag must match workspace version
+        working-directory: src
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          workspace="$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)".*/\1/')"
+          if [ "$tag" != "$workspace" ]; then
+            echo "::error::tag v${tag} does not match workspace version ${workspace} (src/Cargo.toml). Bump the workspace version before cutting the tag."
+            exit 1
+          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
