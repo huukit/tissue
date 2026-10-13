@@ -80,6 +80,9 @@ cp -f /usr/local/bin/tissue.previous /usr/local/bin/tissue && systemctl restart 
 - Downloads only from `huukit/tissue` GitHub Releases (no other sources)
 - `sha256sum -c` against the published `.sha256` sidecar **before** any swap;
   failed verification = no swap, the service keeps running the old version
+- Currency check is content-based, not version-string-based: the upgrade
+  script stamps the verified archive hash in `tissue.sha` next to the binary
+  and no-ops when the latest Release's sidecar matches the stamp
 - One rollback copy (`tissue.previous`) maintained by the upgrade script
 - No restart unless a new binary actually installed; if the service fails to
   come up after a restart, the log line prints the exact rollback command

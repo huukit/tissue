@@ -36,9 +36,12 @@ if [ -z "$latest_tag" ]; then
     exit 1
 fi
 
-# Content-based currency check (#88): the on-disk binary's sha256 vs the
-# published asset sidecar. `--version` is NOT trusted — published binaries
-# have carried a stale version string before (v0.1.1 reported 0.1.0).
+# Content-based currency check (#88): `--version` is NOT trusted — published
+# binaries have carried a stale version string before (v0.1.1 reported 0.1.0).
+# The sidecar hashes the release ARCHIVE, not the extracted binary, so the
+# on-disk binary cannot be compared to it directly. Instead, at swap time we
+# stamp the verified archive hash next to the binary (${BIN_PATH}.sha); the
+# cheap no-op path is: fetch sidecar -> compare stamp -> exit 0.
 base="https://github.com/${REPO_SLUG}/releases/download/${latest_tag}"
 expected_sha="$(curl -fsSL --max-time 30 "$base/$ASSET.sha256" \
     | awk '{print $1}')"
@@ -46,11 +49,12 @@ if [ -z "$expected_sha" ]; then
     log "could not fetch the sha256 sidecar for ${latest_tag}"
     exit 1
 fi
-if [ -x "$BIN_PATH" ] && sha256sum "$BIN_PATH" 2>/dev/null | grep -q "^${expected_sha} "; then
+if [ -x "$BIN_PATH" ] && [ -f "${BIN_PATH}.sha" ] \
+    && grep -q "^${expected_sha}" "${BIN_PATH}.sha"; then
     log "installed binary already matches ${latest_tag}; nothing to do"
     exit 0
 fi
-log "installed binary differs from ${latest_tag}; upgrading"
+log "installed binary differs from ${latest_tag} (or no stamp); upgrading"
 
 # --- 2. Download the asset -------------------------------------------------
 if ! curl -fsSL --max-time 120 -o "$WORK/$ASSET" "$base/$ASSET"; then
@@ -83,6 +87,9 @@ if [ -x "$BIN_PATH" ]; then
 fi
 install -m 0755 "$new_bin" "${BIN_PATH}.new"
 mv -f "${BIN_PATH}.new" "$BIN_PATH"
+# Stamp the verified archive hash so the next run's currency check is a
+# cheap sidecar-vs-stamp comparison (#88).
+printf '%s  %s\n' "$expected_sha" "$ASSET" > "${BIN_PATH}.sha"
 log "installed ${latest_tag} (rollback copy: ${ROLLBACK_PATH})"
 
 # --- 5. Restart the service so the new version actually runs ----------------
