@@ -27,7 +27,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 log() { printf 'tissue-upgrade: %s\n' "$*" >&2; }
 
-# --- 1. What is the latest release, and what are we running? ---------------
+# --- 1. What is the latest release? ----------------------------------------
 latest_tag="$(curl -fsSL --max-time 30 \
     "https://api.github.com/repos/${REPO_SLUG}/releases/latest" \
     | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
@@ -36,27 +36,34 @@ if [ -z "$latest_tag" ]; then
     exit 1
 fi
 
-current_version="$("$BIN_PATH" --version 2>/dev/null | awk '{print $2}')"
-if [ "$current_version" = "$latest_tag" ]; then
-    log "already running ${latest_tag}; nothing to do"
-    exit 0
-fi
-log "running ${current_version:-nothing}, latest is ${latest_tag}"
-
-# --- 2. Download the asset and its sha256 sidecar --------------------------
+# Content-based currency check (#88): the on-disk binary's sha256 vs the
+# published asset sidecar. `--version` is NOT trusted — published binaries
+# have carried a stale version string before (v0.1.1 reported 0.1.0).
 base="https://github.com/${REPO_SLUG}/releases/download/${latest_tag}"
-if ! curl -fsSL --max-time 120 -o "$WORK/$ASSET" "$base/$ASSET"; then
-    log "download failed for $ASSET"
+expected_sha="$(curl -fsSL --max-time 30 "$base/$ASSET.sha256" \
+    | awk '{print $1}')"
+if [ -z "$expected_sha" ]; then
+    log "could not fetch the sha256 sidecar for ${latest_tag}"
     exit 1
 fi
-if ! curl -fsSL --max-time 30 -o "$WORK/$ASSET.sha256" "$base/$ASSET.sha256"; then
-    log "download failed for $ASSET.sha256"
+if [ -x "$BIN_PATH" ] && sha256sum "$BIN_PATH" 2>/dev/null | grep -q "^${expected_sha} "; then
+    log "installed binary already matches ${latest_tag}; nothing to do"
+    exit 0
+fi
+log "installed binary differs from ${latest_tag}; upgrading"
+
+# --- 2. Download the asset -------------------------------------------------
+if ! curl -fsSL --max-time 120 -o "$WORK/$ASSET" "$base/$ASSET"; then
+    log "download failed for $ASSET"
     exit 1
 fi
 
 # --- 3. Verify BEFORE any swap ----------------------------------------------
 cd "$WORK"
-if ! sha256sum -c "$ASSET.sha256" >/dev/null 2>&1; then
+# The downloaded asset must match the sidecar fetched in step 1 (guard
+# against a sidecar swap between the two fetches).
+printf '%s  %s\n' "$expected_sha" "$ASSET" > "$WORK/expected.sha256"
+if ! sha256sum -c "$WORK/expected.sha256" >/dev/null 2>&1; then
     log "sha256 verification FAILED for $ASSET — no swap, service keeps the old version"
     exit 1
 fi
