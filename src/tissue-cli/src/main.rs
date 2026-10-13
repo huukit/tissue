@@ -102,7 +102,7 @@ enum Commands {
     Propose {
         /// Issue id, e.g. `IAM-42`.
         id: String,
-        /// Field to change: title, status, or release.
+        /// Field to change: title, status, or release. Status values: open, in-progress, closed.
         #[arg(long, value_name = "FIELD")]
         field: String,
         /// The value the field currently has (stale proposals are refused).

@@ -67,7 +67,7 @@ Read-only.
 
 | Flag | Meaning |
 |---|---|
-| `--status <STATUS>` | Show only issues with these statuses (`open`, `in-progress`, `closed`) |
+| `--status <STATUS>` | Show only issues with these statuses (`open`, `in-progress`, `closed`) — the full `status` enum; an issue's `status` front-matter field accepts the same three values |
 
 ---
 
@@ -114,7 +114,7 @@ tissue propose IAM-42 --field status --current open \
 
 | Flag | Meaning |
 |---|---|
-| `--field <FIELD>` | Field to change: `title`, `status`, or `release` |
+| `--field <FIELD>` | Field to change: `title`, `status`, or `release`. `status` accepts exactly: `open`, `in-progress`, `closed` |
 | `--current <VALUE>` | The value the field currently has (stale proposals are refused) |
 | `--proposed <VALUE>` | The value the field should have |
 | `--rationale <TEXT>` | Why the change is right, recorded for the human reviewer |

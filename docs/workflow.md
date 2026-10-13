@@ -16,7 +16,9 @@ Forcing both into one file loses one or the other. Tissue separates
 them structurally — **neither side writes the other's file directly.**
 
 - `issue.md` is YAML front matter (`id`, `title`, `status`, `release`,
-  `tags`, `created`, `updated`) plus a Markdown body you write.
+  `tags`, `created`, `updated`) plus a Markdown body you write. The
+`status` field accepts exactly three values: `open`, `in-progress`,
+`closed`.
 - `agent.jsonl` is one JSON record per line, strictly append-only,
   with a contiguous sequence number per issue.
 
