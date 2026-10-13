@@ -170,6 +170,25 @@ impl Repo {
         self.commit_all(author, message).map(Some)
     }
 
+    /// Create an annotated tag `name` at HEAD. Fails if the tag exists.
+    pub fn create_tag(&self, name: &str, message: &str) -> Result<()> {
+        git(
+            &self.root,
+            &[
+                "-c",
+                "user.name=tissue",
+                "-c",
+                "user.email=tissue@localhost",
+                "tag",
+                "-a",
+                name,
+                "-m",
+                message,
+            ],
+        )
+        .map(|_| ())
+    }
+
     /// Number of commits reachable from HEAD (commit-per-mutation check).
     pub fn commit_count(&self) -> Result<usize> {
         let out = git(&self.root, &["rev-list", "--count", "HEAD"])?;

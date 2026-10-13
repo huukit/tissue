@@ -6,6 +6,7 @@
 pub mod agent;
 pub mod git;
 pub mod human;
+pub mod releases;
 pub mod state;
 pub mod sync;
 
