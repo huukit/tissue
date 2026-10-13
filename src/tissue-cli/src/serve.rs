@@ -81,6 +81,7 @@ fn handle(
     // closing with an undrained body sends a TCP RST that can destroy the
     // queued response on the client side.
     let mut content_length: u64 = 0;
+    let mut headers = String::new();
     loop {
         let mut h = String::new();
         let n = reader
@@ -96,16 +97,30 @@ fn handle(
         {
             content_length = v;
         }
+        headers.push_str(&h);
     }
+    let mut body = Vec::new();
     if content_length > 0 {
-        let mut body = vec![0u8; content_length as usize];
+        body = vec![0u8; content_length as usize];
         reader
             .read_exact(&mut body)
             .map_err(|e| format!("body: {e}"))?;
     }
     let path = target.split('?').next().unwrap_or("/").to_string();
 
-    // Read-only: refuse anything but GET (405 with JSON error).
+    if let Some(rest) = path.strip_prefix("/api/") {
+        return api_route(
+            &mut stream,
+            &method,
+            rest,
+            repo,
+            &headers,
+            &body,
+            project_prefix,
+        );
+    }
+
+    // Outside /api the viewer stays read-only: GET only (405 with JSON error).
     if method != "GET" {
         return respond_json(
             &mut stream,
@@ -114,9 +129,6 @@ fn handle(
         );
     }
 
-    if let Some(rest) = path.strip_prefix("/api/") {
-        return api_route(&mut stream, rest, repo, project_prefix);
-    }
     static_route(&mut stream, &path, gui_root)
 }
 
@@ -126,15 +138,40 @@ fn handle(
 
 fn api_route(
     stream: &mut TcpStream,
+    method: &str,
     rest: &str,
     repo: &Path,
+    headers: &str,
+    body: &[u8],
     project_prefix: Option<&str>,
 ) -> Result<(), String> {
     let rest = rest.trim_matches('/');
+    // Write endpoints (agent API, #80): POST only, token-protected.
+    // A GET on a write route is refused with 405 (write path is POST-only).
+    if method == "POST" {
+        return api_write_route(stream, rest, repo, headers, body);
+    }
+    // Reads: GET only, loopback-only, tokenless. A GET on a write-only
+    // subroute (records/propose) tells the caller to POST with a token.
+    if let Some(t) = rest.strip_prefix("issues/") {
+        if matches!(t.rsplit_once('/'), Some((_, "records" | "propose"))) {
+            return respond_json(
+                stream,
+                405,
+                "{\"error\":\"write endpoint: POST with Authorization: Bearer <token>\"}",
+            );
+        }
+    }
+    if method != "GET" {
+        return respond_json(stream, 405, "{\"error\":\"read-only viewer: GET only\"}");
+    }
     if rest == "issues" {
         return api_issues(stream, repo, project_prefix);
     }
     if let Some(id) = rest.strip_prefix("issues/") {
+        if id.contains('/') {
+            return respond_json(stream, 404, "{\"error\":\"unknown api route\"}");
+        }
         return api_issue_detail(stream, repo, id);
     }
     if rest == "releases" {
@@ -144,6 +181,230 @@ fn api_route(
         return api_release_detail(stream, repo, id);
     }
     respond_json(stream, 404, "{\"error\":\"unknown api route\"}")
+}
+
+// ---------------------------------------------------------------------------
+// Agent write API (#80): append/propose only, never the human format directly
+// (STATE.md decision 4). All writes go through tissue-core so the
+// commit-per-mutation audit trail and stream invariants hold.
+// ---------------------------------------------------------------------------
+
+/// The repo's API token, read from `.tissue/config.yml` (`api_token:`).
+/// Absent/empty means the write API is disabled.
+fn api_token(repo: &Path) -> Option<String> {
+    let config = std::fs::read_to_string(tissue_dir(repo).join("config.yml")).ok()?;
+    let line = config
+        .lines()
+        .find(|l| l.trim_start().starts_with("api_token:"))?;
+    let token = line
+        .trim_start()
+        .strip_prefix("api_token:")?
+        .trim()
+        .trim_matches('"');
+    let token = token.trim();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.to_string())
+    }
+}
+
+/// Constant-time-ish comparison: equal-length check first, then xor-fold.
+fn token_matches(expected: &str, provided: &str) -> bool {
+    let a = expected.as_bytes();
+    let b = provided.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+fn bearer_token(headers: &str) -> Option<String> {
+    headers.lines().find_map(|h| {
+        let (name, value) = h.split_once(':')?;
+        if !name.trim().eq_ignore_ascii_case("authorization") {
+            return None;
+        }
+        let v = value.trim();
+        let token = v.strip_prefix("Bearer ")?;
+        Some(token.trim().to_string())
+    })
+}
+
+fn api_write_route(
+    stream: &mut TcpStream,
+    rest: &str,
+    repo: &Path,
+    headers: &str,
+    body: &[u8],
+) -> Result<(), String> {
+    // Auth failures are explicit and never log the token (AC4).
+    let Some(token) = api_token(repo) else {
+        return respond_json(
+            stream,
+            503,
+            "{\"error\":\"write API disabled: no api_token in .tissue/config.yml\"}",
+        );
+    };
+    match bearer_token(headers) {
+        Some(provided) if token_matches(&token, &provided) => {}
+        Some(_) => {
+            return respond_json(stream, 401, "{\"error\":\"invalid or expired token\"}");
+        }
+        None => {
+            return respond_json(
+                stream,
+                401,
+                "{\"error\":\"missing Authorization: Bearer <token> header\"}",
+            );
+        }
+    }
+    let payload = match std::str::from_utf8(body) {
+        Ok(s) => s,
+        Err(_) => {
+            return respond_json(
+                stream,
+                400,
+                "{\"error\":\"request body must be UTF-8 JSON\"}",
+            )
+        }
+    };
+    let rest = rest.trim_matches('/');
+    if rest == "issues" {
+        return api_write_create_issue(stream, repo, payload);
+    }
+    if let Some(tail) = rest.strip_prefix("issues/") {
+        let Some((id, verb)) = tail.split_once('/') else {
+            return respond_json(stream, 404, "{\"error\":\"unknown api route\"}");
+        };
+        match verb {
+            "records" => return api_write_append_record(stream, repo, id, payload),
+            "propose" => return api_write_propose(stream, repo, id, payload),
+            _ => {
+                return respond_json(stream, 404, "{\"error\":\"unknown api route\"}");
+            }
+        }
+    }
+    respond_json(stream, 404, "{\"error\":\"unknown api route\"}")
+}
+
+fn json_field<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    value.get(key)?.as_str()
+}
+
+fn parse_json_body(payload: &str) -> Result<serde_json::Value, u16> {
+    serde_json::from_str(payload).map_err(|_| 400u16)
+}
+
+/// POST /api/issues  {"id": "IAM-9", "title": "...", "actor": "agent:dev-1"}
+/// Creates an issue (human format untouched by the agent afterwards).
+fn api_write_create_issue(
+    stream: &mut TcpStream,
+    repo: &Path,
+    payload: &str,
+) -> Result<(), String> {
+    let v =
+        match parse_json_body(payload) {
+            Ok(v) => v,
+            Err(code) => return respond_json(
+                stream,
+                code,
+                "{\"error\":\"request body must be a JSON object: {\"id\",\"title\",\"actor\"}\"}",
+            ),
+        };
+    let (Some(id), Some(title)) = (json_field(&v, "id"), json_field(&v, "title")) else {
+        return respond_json(
+            stream,
+            400,
+            "{\"error\":\"body must have string fields: id, title, (optional) actor\"}",
+        );
+    };
+    let actor_id = json_field(&v, "actor").unwrap_or("agent:api");
+    match crate::api_write::create_issue(repo, id, title, actor_id) {
+        Ok(()) => respond_json(
+            stream,
+            201,
+            &format!(
+                "{{\"created\":{},\"title\":{}}}",
+                json_str(id),
+                json_str(title)
+            ),
+        ),
+        Err(e) => respond_json(stream, 400, &format!("{{\"error\":{}}}", json_str(&e))),
+    }
+}
+
+/// POST /api/issues/<id>/records  {"type": "observation", "data": {...}, "actor": "agent:dev-1"}
+/// Appends an agent-writable record to the issue's stream.
+fn api_write_append_record(
+    stream: &mut TcpStream,
+    repo: &Path,
+    id: &str,
+    payload: &str,
+) -> Result<(), String> {
+    let v =
+        match parse_json_body(payload) {
+            Ok(v) => v,
+            Err(code) => return respond_json(
+                stream,
+                code,
+                "{\"error\":\"request body must be a JSON object: {\"type\",\"data\",\"actor\"}\"}",
+            ),
+        };
+    let actor_id = json_field(&v, "actor").unwrap_or("agent:api");
+    let Some(data) = v.get("data") else {
+        return respond_json(stream, 400, "{\"error\":\"body must have a data object\"}");
+    };
+    match crate::api_write::append_record(repo, id, actor_id, data) {
+        Ok(seq) => respond_json(stream, 201, &format!("{{\"appended\":true,\"seq\":{seq}}}")),
+        Err(e) => respond_json(stream, 400, &format!("{{\"error\":{}}}", json_str(&e))),
+    }
+}
+
+/// POST /api/issues/<id>/propose
+/// {"field":"title","current":"...","proposed":"...","rationale":"...","actor":"agent:dev-1"}
+/// Creates a proposal via the core loop: tags needs-review, one commit;
+/// the human format is never written directly.
+fn api_write_propose(
+    stream: &mut TcpStream,
+    repo: &Path,
+    id: &str,
+    payload: &str,
+) -> Result<(), String> {
+    let v = match parse_json_body(payload) {
+        Ok(v) => v,
+        Err(code) => {
+            return respond_json(
+                stream,
+                code,
+                "{\"error\":\"request body must be a JSON object: {\"field\",\"current\",\"proposed\",\"rationale\",\"actor\"}\"}",
+            )
+        }
+    };
+    let (Some(field), Some(current), Some(proposed)) = (
+        json_field(&v, "field"),
+        json_field(&v, "current"),
+        json_field(&v, "proposed"),
+    ) else {
+        return respond_json(
+            stream,
+            400,
+            "{\"error\":\"body must have string fields: field, current, proposed, (optional) rationale, actor\"}",
+        );
+    };
+    let rationale = json_field(&v, "rationale").unwrap_or("");
+    let actor_id = json_field(&v, "actor").unwrap_or("agent:api");
+    match crate::api_write::propose(repo, id, field, current, proposed, rationale, actor_id) {
+        Ok(proposal_id) => respond_json(
+            stream,
+            201,
+            &format!(
+                "{{\"proposal_id\":{},\"state\":\"proposed\",\"tagged\":\"needs-review\"}}",
+                json_str(&proposal_id)
+            ),
+        ),
+        Err(e) => respond_json(stream, 400, &format!("{{\"error\":{}}}", json_str(&e))),
+    }
 }
 
 fn scan_issues(repo: &Path, project_prefix: Option<&str>) -> Vec<IssueFile> {

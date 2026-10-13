@@ -4,6 +4,7 @@
 //! lives here. Commands that need the sync/proposal loop (#12) report a
 //! clear "not yet available" error until that lands.
 
+mod api_write;
 mod bootstrap;
 mod serve;
 

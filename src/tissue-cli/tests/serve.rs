@@ -216,14 +216,27 @@ fn serve_is_read_only_get_only() {
     let server = start_server(&scratch);
     let addr = server.addr;
 
-    // POST to the API is rejected with 405.
-    let req = "POST /api/issues HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\nConnection: close\r\n\r\nx=";
+    // POST outside the API is rejected with 405 (viewer stays read-only).
+    let req = "POST /index.html HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\nConnection: close\r\n\r\nx=";
     let (status, _headers, body) = http(&addr, req);
     let body = body.trim();
     assert!(status.contains("405"), "POST must 405: {status}");
     assert!(
         body.contains("GET only") || body.contains("read-only"),
         "405 body: {body}"
+    );
+    // POST to the agent write API without a configured token is an
+    // explicit auth error, not a silent mutation (#80).
+    let req = "POST /api/issues HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\nConnection: close\r\n\r\nx=";
+    let (status, _headers, body) = http(&addr, req);
+    let body = body.trim();
+    assert!(
+        status.contains("503") || status.contains("401"),
+        "unauthenticated API POST must fail explicitly: {status} {body}"
+    );
+    assert!(
+        body.contains("disabled") || body.contains("token"),
+        "explicit error body: {body}"
     );
 
     // DELETE also rejected.
