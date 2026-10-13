@@ -35,6 +35,16 @@ Writes: a new git repo containing `.tissue/config.yml` (and
 
 ---
 
+## `revision` (front matter)
+
+Every human-format mutation bumps a monotonic `revision` field in `issue.md`.
+Mutating commands (`propose`, `approve`, `reject`) capture the file content at
+read time and refuse to write — exiting non-zero with
+`conflict: issue changed while you were working — re-read it and retry` — if
+the file changed on disk in between (e.g. another window or machine edited it).
+Nothing is auto-resolved or clobbered: re-read the issue and re-run the command.
+Older files without the field parse as revision 1.
+
 ## `tissue create <ID> <TITLE>`
 
 Create a new issue. `ID` must match `[A-Z]+-<number>` (e.g. `IAM-42`).

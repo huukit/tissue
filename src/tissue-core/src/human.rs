@@ -22,6 +22,8 @@ pub enum Error {
     Parse(String),
     /// Structural parse succeeded but a field violates the spec.
     Validation(String),
+    /// The file changed on disk between read and write (#78 guard).
+    Conflict(String),
 }
 
 impl fmt::Display for Error {
@@ -30,6 +32,7 @@ impl fmt::Display for Error {
             Error::Io(m) => write!(f, "io error: {m}"),
             Error::Parse(m) => write!(f, "parse error: {m}"),
             Error::Validation(m) => write!(f, "validation error: {m}"),
+            Error::Conflict(m) => write!(f, "conflict: {m}"),
         }
     }
 }
@@ -306,6 +309,9 @@ pub struct IssueFile {
     pub tags: Vec<String>,
     pub created: String,
     pub updated: String,
+    /// Monotonic revision, bumped by every human-format mutation; the
+    /// optimistic concurrency guard refuses writes when it changed (#78).
+    pub revision: u64,
     pub body: String,
     front: FrontMatter,
 }
@@ -352,6 +358,7 @@ impl IssueFile {
             tags: Vec::new(),
             created: now.to_string(),
             updated: now.to_string(),
+            revision: 1,
             body: body.to_string(),
             front: FrontMatter {
                 raw: None,
@@ -390,10 +397,25 @@ impl IssueFile {
         let tags = tags_field(&mapping)?;
         let created = string_field(&mapping, "created")?;
         let updated = string_field(&mapping, "updated")?;
+        let revision = match mapping.get(Value::String("revision".to_string())) {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) => Some(
+                s.parse::<u64>()
+                    .map_err(|_| Error::Validation(format!("revision `{s}` is not a number")))?,
+            ),
+            Some(Value::Number(n)) => Some(n.as_u64().ok_or_else(|| {
+                Error::Validation(format!("revision `{n}` is not a non-negative integer"))
+            })?),
+            Some(other) => {
+                return Err(Error::Validation(format!(
+                    "field `revision` must be a number, got {other:?}"
+                )))
+            }
+        };
         let extra = strip_known(
             &mapping,
             &[
-                "id", "title", "status", "release", "tags", "created", "updated",
+                "id", "title", "status", "release", "tags", "created", "updated", "revision",
             ],
         );
         Ok(IssueFile {
@@ -404,6 +426,7 @@ impl IssueFile {
             tags,
             created,
             updated,
+            revision: revision.unwrap_or(1),
             body,
             front: FrontMatter {
                 raw: front.raw,
@@ -436,8 +459,23 @@ impl IssueFile {
             ),
             ("created", self.created.clone()),
             ("updated", self.updated.clone()),
+            ("revision", self.revision.to_string()),
         ];
         join_fences(&self.front.render(&known), &self.body)
+    }
+
+    /// Write, refusing if the file on disk changed since `expected` was
+    /// read (optimistic concurrency, #78). Content-based, no locks.
+    pub fn write_if_unchanged(&mut self, path: &Path, expected: &str) -> Result<()> {
+        let current = read_file(path)?;
+        if current != expected {
+            return Err(Error::Conflict(
+                "issue changed while you were working — re-read it and retry".into(),
+            ));
+        }
+        self.revision += 1;
+        self.front.invalidate();
+        atomic_write(path, &self.serialize())
     }
 
     pub fn write(&self, path: &Path) -> Result<()> {

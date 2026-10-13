@@ -24,6 +24,7 @@ release: v1.2.0            # optional; empty/absent = unscheduled (source of tru
 tags: [needs-review]       # free-form list; `needs-review` is reserved: set when a proposal awaits review
 created: 2026-10-08T09:00:00Z
 updated: 2026-10-08T14:20:00Z
+revision: 3                # monotonic; bumped by every human-format mutation. Optimistic concurrency guard (#78): mutating commands refuse to write when the file changed since they read it.
 ---
 
 ## Summary

@@ -396,6 +396,8 @@ impl Core {
     ) -> Result<String> {
         let records = self.read_stream(issue_id)?;
         let issue_path = self.issue_path(issue_id)?;
+        let expected = fs::read_to_string(&issue_path)
+            .map_err(|e| Error::Io(format!("{}: {e}", issue_path.display())))?;
         let mut issue = IssueFile::from_path(&issue_path)?;
         let actual = Self::field_text(&issue, change.field);
         if actual != change.current {
@@ -426,7 +428,7 @@ impl Core {
             }),
         )?;
         issue.add_tag(NEEDS_REVIEW, change.now);
-        issue.write(&issue_path)?;
+        issue.write_if_unchanged(&issue_path, &expected)?;
         self.repo.commit_all(
             &actor.author,
             &format!(
@@ -465,8 +467,9 @@ impl Core {
         )?;
 
         let issue_path = self.issue_path(issue_id)?;
+        let expected = fs::read_to_string(&issue_path)
+            .map_err(|e| Error::Io(format!("{}: {e}", issue_path.display())))?;
         let mut issue = IssueFile::from_path(&issue_path)?;
-
         if decision == Decision::Approve {
             let actual = Self::field_text(&issue, proposal.field);
             if actual != proposal.current {
@@ -518,7 +521,7 @@ impl Core {
         ));
 
         issue.remove_tag(NEEDS_REVIEW, now);
-        issue.write(&issue_path)?;
+        issue.write_if_unchanged(&issue_path, &expected)?;
 
         let message = match decision {
             Decision::Approve => format!(
@@ -635,6 +638,88 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.to_string().contains("not legal"), "{err}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn concurrent_edit_of_issue_md_refuses_approve_loudly() {
+        let (dir, core) = temp_core();
+        seed_issue(&core, "IAM-1");
+        core.propose(
+            "IAM-1",
+            &agent(),
+            &ProposalDraft {
+                now: "2026-10-08T10:00:00Z",
+                field: Field::Status,
+                current: "open",
+                proposed: "in-progress",
+                rationale: "work started",
+            },
+        )
+        .unwrap();
+        // Simulate the race the guard exists for: the file changes on disk
+        // between the command's read and its write. `decide` captures the
+        // expected content at read time; a mid-command edit makes the
+        // on-disk bytes differ and the guarded write must refuse.
+        let path = core.issue_path("IAM-1").unwrap();
+        let expected_at_read = fs::read_to_string(&path).unwrap();
+        let mut issue = IssueFile::from_path(&path).unwrap();
+        issue.remove_tag(NEEDS_REVIEW, "2026-10-08T11:00:00Z");
+        // concurrent edit lands first:
+        let concurrent = expected_at_read.replace("## Summary", "## Summary (edited concurrently)");
+        fs::write(&path, concurrent).unwrap();
+        let err = issue
+            .write_if_unchanged(&path, &expected_at_read)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("conflict"),
+            "must fail with a conflict, got: {err}"
+        );
+        // The concurrent edit survives: no silent clobber.
+        let after = IssueFile::from_path(&path).unwrap();
+        assert!(after.body.contains("edited concurrently"));
+        assert_eq!(after.status, IssueStatus::Open);
+        assert_eq!(after.revision, issue.revision);
+        // and the guarded write succeeds when nothing changed:
+        let mut fresh = IssueFile::from_path(&path).unwrap();
+        let now_expected = fs::read_to_string(&path).unwrap();
+        fresh.remove_tag(NEEDS_REVIEW, "2026-10-08T11:00:00Z");
+        fresh.write_if_unchanged(&path, &now_expected).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn approve_bumps_revision_and_rewrite_is_guarded() {
+        let (dir, core) = temp_core();
+        seed_issue(&core, "IAM-1");
+        let before = IssueFile::from_path(&core.issue_path("IAM-1").unwrap()).unwrap();
+        assert_eq!(before.revision, 1);
+        let pid = core
+            .propose(
+                "IAM-1",
+                &agent(),
+                &ProposalDraft {
+                    now: "2026-10-08T10:00:00Z",
+                    field: Field::Status,
+                    current: "open",
+                    proposed: "in-progress",
+                    rationale: "work started",
+                },
+            )
+            .unwrap();
+        let mid = IssueFile::from_path(&core.issue_path("IAM-1").unwrap()).unwrap();
+        assert_eq!(mid.revision, 2, "propose (tag mutation) must bump revision");
+        core.decide(
+            "IAM-1",
+            &human_actor(),
+            "2026-10-08T11:00:00Z",
+            &pid,
+            Decision::Approve,
+            None,
+        )
+        .unwrap();
+        let after = IssueFile::from_path(&core.issue_path("IAM-1").unwrap()).unwrap();
+        assert_eq!(after.revision, 3, "approve must bump revision");
         let _ = fs::remove_dir_all(&dir);
     }
 
