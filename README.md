@@ -118,6 +118,10 @@ by design — the port is never published.
 CI builds the image on every push to `main` and uploads it as a
 workflow artifact (`tissue-poc-container-image`).
 
+## License
+
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
+
 ## The joke
 
 The name works on every level: a *tissue* wipes up the mess, and *issue* is right there inside it.
