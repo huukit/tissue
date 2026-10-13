@@ -126,7 +126,20 @@ fn start_server(repo: &Scratch) -> Server {
 
 /// One raw HTTP request; returns (status_line, headers, body).
 fn http(addr: &SocketAddr, request: &str) -> (String, String, String) {
-    let mut stream = TcpStream::connect(addr).expect("connect");
+    // Retry the connect: the single-threaded server may briefly stall in
+    // accept (or the just-released port may not be re-listened yet), which
+    // otherwise surfaces as a flaky `Connection refused` (#72).
+    let mut stream = None;
+    for _ in 0..50 {
+        match TcpStream::connect(addr) {
+            Ok(s) => {
+                stream = Some(s);
+                break;
+            }
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    }
+    let mut stream = stream.unwrap_or_else(|| panic!("connect to {addr}"));
     stream.write_all(request.as_bytes()).expect("write request");
     let mut reader = BufReader::new(stream);
     let mut status = String::new();
