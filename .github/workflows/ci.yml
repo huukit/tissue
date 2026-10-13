@@ -19,7 +19,7 @@ env:
 jobs:
   rust:
     name: fmt / check / clippy / test / audit / gui tsc
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     defaults:
       run:
@@ -76,7 +76,7 @@ jobs:
   msrv:
     name: MSRV (1.85)
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
       run:
@@ -96,7 +96,7 @@ jobs:
   release:
     name: static binary (build + smoke test)
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
@@ -167,7 +167,7 @@ jobs:
 
   linear-history:
     name: linear history (no merge commits)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
@@ -201,7 +201,7 @@ jobs:
   container:
     name: container image (build + upload tar)
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
