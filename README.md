@@ -82,44 +82,32 @@ toolchain, no node, no server dependencies.
 
 The viewer is read-only and loopback-only: it binds `127.0.0.1` exclusively
 and refuses every non-GET request — nothing is exposed beyond your machine.
+
+Full walkthrough — install variants, all three init modes, sha256
+verification, and the standalone-issue-repo principle — lives in
+[docs/getting-started.md](docs/getting-started.md). The daily
+human/agent loop (sync, propose, approve/reject) is documented in
+[docs/workflow.md](docs/workflow.md), and every command and flag in
+[docs/cli-reference.md](docs/cli-reference.md).
+
 ## Getting started — container
 
-The PoC runs as a single static binary in a minimal container. The GUI
-assets are embedded in the binary, so the final image contains nothing
-else.
+The PoC runs as a single static binary in a minimal container: GUI
+assets are embedded in the binary, so the final image contains
+nothing else. Build the image, mount an issue repo, and browse it —
+the viewer is loopback-only by design, so use `--network host` on
+Linux:
 
 ```sh
-# Build the image (multi-stage: musl build -> scratch final stage)
 docker build -f Dockerfile -t tissue:poc .
-
-# View an issue repo in the browser (loopback only)
 docker run --rm --network host \
   -v /path/to/myproject-issues:/issues tissue:poc \
   serve --port 8080 --repo /issues
 ```
 
-Then open `http://127.0.0.1:8080`.
-
-Read-only CLI commands work through the entrypoint:
-
-```sh
-docker run --rm -v /path/to/myproject-issues:/issues tissue:poc list --repo /issues
-```
-
-Bootstrap (`tissue init`) runs on the host with a local binary: the
-final image contains only the tissue binary by design, and `init`
-needs the git CLI. The container is for viewing and read-only commands
-against an existing issue repo.
-
-**Loopback-only.** The viewer binds `127.0.0.1` exclusively and
-refuses to serve on any other address. In the container, use
-`--network host` (Linux): the binary then binds the host's loopback
-directly, so `-p` publishing is unnecessary and nothing is exposed to
-the network. Binding inside a bridge-network container is unreachable
-by design — the port is never published.
-
-CI builds the image on every push to `main` and uploads it as a
-workflow artifact (`tissue-poc-container-image`).
+Read-only CLI commands work through the entrypoint too. Build steps,
+the `--network host` rationale, and what stays on the host: see
+[docs/container.md](docs/container.md).
 
 ## License
 
