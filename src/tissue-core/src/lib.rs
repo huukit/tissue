@@ -16,6 +16,9 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 mod tests {
     #[test]
     fn workspace_scaffold_is_alive() {
-        assert_eq!(super::VERSION, "0.1.0");
+        // Not pinned to a literal: the version bumps per release (#88), and
+        // the release workflow's tag guard enforces tag == workspace version.
+        assert_eq!(super::VERSION, env!("CARGO_PKG_VERSION"));
+        assert!(!super::VERSION.is_empty());
     }
 }
