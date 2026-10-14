@@ -11,14 +11,16 @@ Grab the archive for your platform from the
 
 | Platform | File |
 |---|---|
-| Linux x86_64 | `tissue-x86_64-unknown-linux-musl.tar.gz` |
-| Windows x86_64 | `tissue-x86_64-pc-windows-msvc.zip` |
-| macOS ARM | `tissue-aarch64-apple-darwin.tar.gz` |
+| Linux x86_64 | `tissue-v<version>-x86_64-unknown-linux-musl.tar.gz` |
+| Windows x86_64 | `tissue-v<version>-x86_64-pc-windows-msvc.zip` |
+| macOS ARM | `tissue-v<version>-aarch64-apple-darwin.tar.gz` |
+
+(replace `<version>` with the release tag you are downloading, e.g. `v0.1.4`)
 
 Verify the download against the published `.sha256` sidecar:
 
 ```sh
-sha256sum --check tissue-x86_64-unknown-linux-musl.tar.gz.sha256
+sha256sum --check tissue-v<version>-x86_64-unknown-linux-musl.tar.gz.sha256
 ```
 
 Unpack it and put the `tissue` binary (`tissue.exe` on Windows) on your
@@ -78,6 +80,34 @@ tissue init --from-github huukit/tissue --dir ~/tissue-issues
 makes `~/tissue-issues` a self-contained issue repo (own git history,
 own config). Use `--dir` whenever you want to control that placement.
 
+## The GUI and its API token
+
+`tissue serve`'s GUI is the full review surface: browse issues (with
+project filters and search), work the needs-review queue (approve/reject
+in the browser), read the agent-stream timeline, and edit front matter
+with conflict-safe semantics.
+
+Write actions in the GUI need the repo's API token:
+
+1. Set one in `.tissue/config.yml` — a line `api_token: "your-token"` —
+   or export `TISSUE_API_TOKEN` in the environment before `tissue serve`
+   (the env var wins; nothing lands in tracked files).
+2. In the GUI, paste the token into the token bar once per browser
+   session; it is kept in the browser's sessionStorage only — never
+   written to disk, never logged.
+
+Agents use the same token for the REST write API
+(`Authorization: Bearer <token>`). See the
+[CLI reference](cli-reference.md) for the endpoint list.
+
+## Automated deployment (testing machines)
+
+`deploy/` contains a systemd service + timer that keeps a testing machine
+on the latest release automatically: it polls GitHub Releases, sha256-
+verifies the download before swapping the binary, keeps one rollback
+copy, and never breaks the loopback-only binding. One-time setup in
+[deploy/README.md](../deploy/README.md).
+
 ## Where things live
 
 ```
@@ -99,3 +129,4 @@ myproject-issues/
 - [Workflow](workflow.md) — the dual-format model and the daily loop
 - [CLI reference](cli-reference.md) — every command and flag
 - [Container guide](container.md) — run the viewer in Docker
+- [Automated deployment](../deploy/README.md) — systemd service + auto-upgrade for a testing machine
