@@ -66,7 +66,10 @@ refused as stale.
 1. `tissue list` — triage; anything tagged `NEEDS REVIEW` needs you.
 2. Read the proposal (`tissue show IAM-42`), then `approve` or `reject`.
 3. Edit `issue.md` as needed, then `tissue sync IAM-42 --summary ...`.
-4. `tissue serve` to browse everything read-only in the browser.
+4. `tissue serve` for the GUI: triage the needs-review queue, read
+   proposals with before/after context, approve or reject them in the
+   browser, edit front matter (conflict-safe), and add sync notes —
+   every GUI action lands as the same git commit as its CLI twin.
 
 **Agent:**
 1. Read `issue.md` and `agent.jsonl` for full context.

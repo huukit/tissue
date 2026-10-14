@@ -60,7 +60,7 @@ Three skins over one core, so humans and agents always see the same truth:
 
 ## Status
 
-Early but working PoC. The core loop is implemented and shipped: `tissue-core` + `tissue-cli` (init/create/list/show/sync/propose/approve/reject, every mutation a git commit), a read-only `tissue serve` GUI viewer, a container image path, and a tag-triggered release workflow — `v0.1.0` artifacts are built and green on all three platforms. Licensed GPL-3.0-only. The product state lives in [`operations/product-owner/STATE.md`](operations/product-owner/STATE.md), the roadmap in [`operations/project/ROADMAP.md`](operations/project/ROADMAP.md). Stack: Rust core/CLI, TypeScript GUI; REST API still planned. Current milestone: the [PoC dogfood switch](https://github.com/huukit/tissue/issues/3) — run tissue's own issues in tissue.
+Working PoC, feature-complete through the GUI roadmap. Shipped: `tissue-core` + `tissue-cli` (init/create/list/show/sync/propose/approve/reject/release, every mutation a git commit, optimistic revision guard on concurrent edits), multi-machine `pull`/`push` with rebase-only semantics, and the full `tissue serve` GUI — needs-review queue with browser approve/reject, agent-stream timeline, conflict-safe front-matter editing — over a token-authenticated REST write API. Plus a container image path, automated testing-machine deployment (`deploy/`), and a tag-triggered release workflow. Licensed GPL-3.0-only. The product state lives in [`operations/product-owner/STATE.md`](operations/product-owner/STATE.md), the roadmap in [`operations/project/ROADMAP.md`](operations/project/ROADMAP.md). Stack: Rust core/CLI, TypeScript GUI. Next milestone: the [PoC dogfood switch](https://github.com/huukit/tissue/issues/3) — run tissue's own issues in tissue.
 
 ## Getting started — standalone
 
@@ -80,8 +80,10 @@ toolchain, no node, no server dependencies.
 3. **View it** — `cd <your-project>-issues && tissue serve`, then open
    <http://127.0.0.1:7323>
 
-The viewer is read-only and loopback-only: it binds `127.0.0.1` exclusively
-and refuses every non-GET request — nothing is exposed beyond your machine.
+The viewer binds `127.0.0.1` exclusively — nothing is exposed beyond your
+machine. Reads need no token; write actions (approve/reject, edit, sync)
+require the repo's API token, entered once per browser session (kept in
+sessionStorage only, never on disk).
 
 Full walkthrough — install variants, all three init modes, sha256
 verification, and the standalone-issue-repo principle — lives in
