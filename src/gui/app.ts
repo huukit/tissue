@@ -13,7 +13,12 @@
  * already scopes the data), status filtering, and search by id/title.
  * Releases and Needs Review render placeholder views in this stage.
  *
- * Read-only by construction: only GET fetches, no mutating controls.
+ * Stage 4 (#99): human editing + sync — the first mutating controls.
+ * Token lives in sessionStorage ONLY (never persisted server-side, never
+ * logged); writes go through the token-protected API propose/sync
+ * endpoints, and the #78 revision guard's stale-current refusals surface
+ * as explicit "changed while you were editing" messages, never silent
+ * overwrites. All user input is HTML-escaped before touching the DOM.
  * Markdown is rendered by a small, escape-first renderer: all input
  * text is HTML-escaped before tags are generated, so issue content
  * can never inject HTML (acceptance criterion 3, AGENTS.md §5).
@@ -550,6 +555,152 @@ function renderMarkdown(src: string): string {
   return out.join("\n");
 }
 
+const TOKEN_KEY = "tissue-api-token";
+
+function getToken(): string {
+  return sessionStorage.getItem(TOKEN_KEY) ?? "";
+}
+
+function setToken(value: string): void {
+  sessionStorage.setItem(TOKEN_KEY, value);
+}
+
+async function postJson<T>(url: string, body: unknown): Promise<T> {
+  const token = getToken();
+  if (!token) throw new Error("no API token set — enter one in the token field first");
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  });
+  const data = (await res.json().catch(() => null)) as { error?: string } | null;
+  if (!res.ok) {
+    throw new Error(data?.error ?? `request failed: ${res.status}`);
+  }
+  return data as T;
+}
+
+function tokenBoxHtml(): string {
+  return `
+    <div class="token-box">
+      <label for="api-token">API token</label>
+      <input id="api-token" type="password" autocomplete="off"
+             placeholder="paste token (kept in sessionStorage only)"
+             value="${esc(getToken())}">
+    </div>`;
+}
+
+function wireTokenBox(): void {
+  const input = document.getElementById("api-token") as HTMLInputElement | null;
+  if (input) {
+    input.addEventListener("change", () => setToken(input.value));
+  }
+}
+
+interface EditState {
+  id: string;
+  title: string;
+  status: string;
+  release: string;
+}
+
+function editFormHtml(issue: IssueDetail): string {
+  return `
+    <details class="edit-box">
+      <summary>Edit front matter (proposes a change for review)</summary>
+      <div class="edit-fields">
+        <label>Title
+          <input id="edit-title" type="text" value="${esc(issue.title)}">
+        </label>
+        <label>Status
+          <select id="edit-status">
+            ${["open", "in-progress", "closed"]
+              .map(
+                (s) =>
+                  `<option value="${s}"${s === issue.status ? " selected" : ""}>${s}</option>`
+              )
+              .join("")}
+          </select>
+        </label>
+        <label>Release
+          <input id="edit-release" type="text" value="${esc(issue.release ?? "")}"
+                 placeholder="e.g. v1.2.0 (empty = unscheduled)">
+        </label>
+        <button id="edit-submit">Propose change</button>
+        <button id="sync-btn" title="Record a human edit note in the agent stream">Add sync note</button>
+      </div>
+      <p id="edit-result" class="edit-result" aria-live="polite"></p>
+    </details>`;
+}
+
+function wireEditForm(issue: IssueDetail): void {
+  const submit = document.getElementById("edit-submit");
+  const sync = document.getElementById("sync-btn");
+  const result = document.getElementById("edit-result");
+  if (!submit || !sync || !result) return;
+  submit.addEventListener("click", async () => {
+    result.textContent = "…";
+    const title = (document.getElementById("edit-title") as HTMLInputElement).value;
+    const status = (document.getElementById("edit-status") as HTMLSelectElement).value;
+    const release = (document.getElementById("edit-release") as HTMLInputElement).value;
+    try {
+      const changed: string[] = [];
+      if (title !== issue.title) {
+        await postJson<{ proposal_id: string }>(
+          `/api/issues/${encodeURIComponent(issue.id)}/propose`,
+          { field: "title", current: issue.title, proposed: title, actor: "human:gui" }
+        );
+        changed.push("title");
+      }
+      if (status !== issue.status) {
+        await postJson<{ proposal_id: string }>(
+          `/api/issues/${encodeURIComponent(issue.id)}/propose`,
+          { field: "status", current: issue.status, proposed: status, actor: "human:gui" }
+        );
+        changed.push("status");
+      }
+      if ((release || "") !== (issue.release ?? "")) {
+        await postJson<{ proposal_id: string }>(
+          `/api/issues/${encodeURIComponent(issue.id)}/propose`,
+          { field: "release", current: issue.release ?? "", proposed: release, actor: "human:gui" }
+        );
+        changed.push("release");
+      }
+      if (changed.length === 0) {
+        result.textContent = "No changes — nothing proposed.";
+      } else {
+        result.textContent = `Proposed: ${changed.join(", ")} — awaiting review (tagged needs-review).`;
+        void route();
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      result.textContent = /current|stale|mismatch|revision/i.test(msg)
+        ? `Changed while you were editing — re-open the issue and re-apply your edit. (${msg})`
+        : msg;
+    }
+  });
+  sync.addEventListener("click", async () => {
+    result.textContent = "…";
+    const summary = prompt("One-line summary of your manual edit (recorded in the agent stream):");
+    if (!summary) {
+      result.textContent = "Sync cancelled — no summary given.";
+      return;
+    }
+    try {
+      const r = await postJson<{ synced: string; commit: string }>(
+        `/api/issues/${encodeURIComponent(issue.id)}/sync`,
+        { summary, actor: "human:gui" }
+      );
+      result.textContent = `Recorded (commit ${r.commit}). Agents reconcile from this note.`;
+    } catch (e) {
+      result.textContent = e instanceof Error ? e.message : String(e);
+    }
+  });
+}
+
 async function renderDetail(id: string): Promise<void> {
   const el = app();
   if (!el) return;
@@ -601,10 +752,14 @@ async function renderDetail(id: string): Promise<void> {
       <a class="back-link" href="#/issues">&larr; All issues</a>
       <article class="detail">
         <h2>${esc(issue.id)} — ${esc(issue.title)} ${badgeHtml(issue.tags)}</h2>
+        ${tokenBoxHtml()}
         <dl class="front-matter">${fm}</dl>
+        ${editFormHtml(issue)}
         <div class="body">${renderMarkdown(issue.body)}</div>
         ${timeline}
       </article>`;
+    wireTokenBox();
+    wireEditForm(issue);
   } catch (e) {
     el.innerHTML = `<p class="error">${esc(e instanceof Error ? e.message : String(e))}</p>`;
   }

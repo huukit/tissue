@@ -101,6 +101,17 @@ pub fn append_record(
 /// POST /api/issues/<id>/propose: create a proposal through the core
 /// loop — tags needs-review, exactly one commit, human format never
 /// written directly. Stale `current` values are refused (fail-safe).
+/// POST /api/issues/<id>/sync: record a human edit in the AI stream.
+/// Thin wrapper over the core loop; the commit lands exactly as if the
+/// CLI's `tissue sync` had run (#99 Stage 4).
+pub fn sync(repo: &Path, id: &str, actor_id: &str, summary: &str) -> Result<String, String> {
+    let grepo = git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    let core = Core::new(grepo);
+    let actor = actor_from(actor_id);
+    core.sync(id, &actor, &now_utc(), summary)
+        .map_err(|e| format!("sync: {e}"))
+}
+
 pub fn propose(
     repo: &Path,
     id: &str,

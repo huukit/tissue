@@ -278,4 +278,69 @@ body {
   border-radius: 4px;
   padding: 0.5rem;
   overflow-x: auto;
+/* Stage 4 (#99): editing + sync controls */
+.token-box {
+  margin: 0.5rem 0;
+  font-size: 0.85rem;
+}
+.token-box label {
+  display: block;
+  color: #666;
+  margin-bottom: 0.2rem;
+}
+.token-box input {
+  font: inherit;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  width: min(100%, 24rem);
+}
+.edit-box {
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fafafa;
+}
+.edit-box summary {
+  cursor: pointer;
+  color: #555;
+  font-size: 0.9rem;
+}
+.edit-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+.edit-fields label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.8rem;
+  color: #666;
+  gap: 0.2rem;
+}
+.edit-fields input, .edit-fields select {
+  font: inherit;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+.edit-fields button {
+  align-self: flex-end;
+  font: inherit;
+  padding: 0.3rem 0.8rem;
+  border: 1px solid #888;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+}
+.edit-fields button:hover {
+  background: #f0f0f0;
+}
+.edit-result {
+  margin-top: 0.4rem;
+  font-size: 0.85rem;
+  color: #444;
+  min-height: 1.2em;
 }
