@@ -150,6 +150,17 @@ enum Commands {
         #[arg(long, value_name = "NAME")]
         project: Option<String>,
     },
+    /// Fetch the remote and rebase onto it — never a merge commit
+    /// (#110). On conflict: aborts, names the affected issue ids.
+    Pull {},
+    /// Push to the remote: fast-forward only, or `--force-with-lease`
+    /// after a pull-rebase (#110). Refuses anything else.
+    Push {
+        /// Allow `--force-with-lease` (needed once after `tissue pull`
+        /// rebased your local history).
+        #[arg(long)]
+        force_with_lease: bool,
+    },
     /// Reject a pending proposal: records the reason so agents can learn
     /// from it, and clears `needs-review`.
     Reject {
@@ -331,6 +342,8 @@ fn run(cli: Cli) -> Result<(), String> {
             &actor,
         ),
         Commands::Serve { port, project } => serve_cmd(&repo, port, project.as_deref()),
+        Commands::Pull {} => pull_cmd(&repo),
+        Commands::Push { force_with_lease } => push_cmd(&repo, force_with_lease),
         Commands::Release { command } => release_cmd(&repo, command),
     }
 }
@@ -723,6 +736,37 @@ fn show(repo: &Path, id: &str) -> Result<(), String> {
 }
 
 /// `tissue serve`: read-only loopback viewer wrapping the core scan (#30).
+fn pull_cmd(repo: &Path) -> Result<(), String> {
+    require_repo(repo)?;
+    let grepo = git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    let report = grepo.pull_rebase().map_err(|e| format!("pull: {e}"))?;
+    if report.rebased {
+        println!(
+            "pulled: rebased onto origin ({} commit{} behind); history stays linear",
+            report.commits,
+            if report.commits == 1 { "" } else { "s" }
+        );
+        println!("next: `tissue push --force-with-lease` to update the remote");
+    } else {
+        println!("pulled: {}", report.note);
+    }
+    Ok(())
+}
+
+fn push_cmd(repo: &Path, force_with_lease: bool) -> Result<(), String> {
+    require_repo(repo)?;
+    let grepo = git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    grepo
+        .push(force_with_lease)
+        .map_err(|e| format!("push: {e}"))?;
+    if force_with_lease {
+        println!("pushed: fast-forwarded the remote to the rebased history (force-with-lease)");
+    } else {
+        println!("pushed: fast-forward");
+    }
+    Ok(())
+}
+
 fn serve_cmd(repo: &Path, port: Option<u16>, project: Option<&str>) -> Result<(), String> {
     let port = port.unwrap_or(serve::DEFAULT_PORT);
     let prefix = match project {

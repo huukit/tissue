@@ -84,6 +84,17 @@ pub struct Repo {
     root: PathBuf,
 }
 
+/// Outcome of `tissue pull` (#110).
+#[derive(Debug, Default)]
+pub struct PullReport {
+    /// Whether HEAD moved (a rebase actually happened).
+    pub rebased: bool,
+    /// How many commits HEAD and the remote tip were apart.
+    pub commits: usize,
+    /// Human-facing note (e.g. remote has no branch yet).
+    pub note: String,
+}
+
 impl Repo {
     /// Wrap an existing working tree; verifies it is a git repository.
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
@@ -97,7 +108,9 @@ impl Repo {
     pub fn init(root: impl AsRef<Path>) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
         std::fs::create_dir_all(&root)?;
-        git(&root, &["init"])?;
+        // `main` matches the repo convention and the bare-remote default;
+        // older gits default to `master`, which would desync clones.
+        git(&root, &["init", "--initial-branch", "main"])?;
         git(&root, &["config", "user.name", "tissue"])?;
         git(&root, &["config", "user.email", "tissue@localhost"])?;
         let tissue = root.join(".tissue");
@@ -193,6 +206,117 @@ impl Repo {
             ],
         )
         .map(|_| ())
+    }
+
+    /// `tissue pull` (#110): fetch origin and rebase onto it. Never a
+    /// merge commit (audit-trail invariant, AGENTS.md §2). On a conflicted
+    /// rebase the operation is aborted, leaving the tree untouched, and
+    /// the affected issue ids are returned for manual resolution guidance.
+    pub fn pull_rebase(&self) -> Result<PullReport> {
+        git(&self.root, &["fetch", "origin"])?;
+        let branch = self.current_branch().unwrap_or_else(|_| "main".to_string());
+        let upstream_ref = format!("origin/{branch}");
+        let has_upstream = git(&self.root, &["rev-parse", "--verify", &upstream_ref]).is_ok();
+        if !has_upstream {
+            return Ok(PullReport {
+                rebased: false,
+                commits: 0,
+                note: format!("remote has no `{branch}` branch yet — nothing to rebase onto"),
+            });
+        }
+        let head_before = git(&self.root, &["rev-parse", "HEAD"])?;
+        let behind = git(
+            &self.root,
+            &["rev-list", "--count", &format!("HEAD..{upstream_ref}")],
+        )?
+        .trim()
+        .parse::<usize>()
+        .unwrap_or(0);
+        if git(&self.root, &["rev-parse", &upstream_ref])?.trim() == head_before.trim() {
+            return Ok(PullReport {
+                rebased: false,
+                commits: 0,
+                note: "already up to date".into(),
+            });
+        }
+        match git(&self.root, &["rebase", &upstream_ref]) {
+            Ok(_) => {}
+            Err(e) => {
+                // Abort the in-progress rebase so the tree is untouched,
+                // then name the conflicted issues (both sides' changes).
+                let _ = git(&self.root, &["rebase", "--abort"]);
+                let ids = self
+                    .changed_issue_ids(head_before.trim(), &upstream_ref)
+                    .unwrap_or_default();
+                return Err(Error::CommandFailed(
+                    format!(
+                        "rebase onto {upstream_ref} conflicted (aborted, tree untouched) — affected issues: {} — resolve manually with plain git and re-run tissue pull. {e}",
+                        if ids.is_empty() {
+                            "(none identified)".to_string()
+                        } else {
+                            ids.join(", ")
+                        }
+                    ),
+                    String::new(),
+                ));
+            }
+        }
+        let head_after = git(&self.root, &["rev-parse", "HEAD"])?;
+        Ok(PullReport {
+            rebased: head_before.trim() != head_after.trim(),
+            commits: behind,
+            note: String::new(),
+        })
+    }
+
+    /// Current branch name (HEAD symbolic ref).
+    pub fn current_branch(&self) -> Result<String> {
+        let out = git(&self.root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+        Ok(out.trim().to_string())
+    }
+
+    /// Issues whose files changed between two commits — used by pull's
+    /// conflict guidance to name exactly what needs manual attention.
+    pub fn changed_issue_ids(&self, from: &str, to: &str) -> Result<Vec<String>> {
+        let out = git(
+            &self.root,
+            &["diff", "--name-only", from, to, "--", ".tissue/issues"],
+        )?;
+        let mut ids = Vec::new();
+        for line in out.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let parts: Vec<&str> = line.split('/').collect();
+            if parts.len() >= 3 && parts[0] == ".tissue" && parts[1] == "issues" {
+                ids.push(parts[2].to_string());
+            }
+        }
+        Ok(ids)
+    }
+
+    /// `tissue push` (#110): FF-only push; after a rebase the local history
+    /// diverged from the remote's old tip, so `--force-with-lease` is the
+    /// correct non-destructive form. Refuses anything else.
+    pub fn push(&self, force_with_lease: bool) -> Result<()> {
+        let branch = self.current_branch().unwrap_or_else(|_| "main".to_string());
+        let args: Vec<String> = if force_with_lease {
+            vec![
+                "push".into(),
+                "--force-with-lease".into(),
+                "origin".into(),
+                format!("refs/heads/{branch}:refs/heads/{branch}"),
+            ]
+        } else {
+            vec![
+                "push".into(),
+                "origin".into(),
+                format!("refs/heads/{branch}:refs/heads/{branch}"),
+            ]
+        };
+        let argrefs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        git(&self.root, &argrefs).map(|_| ())
     }
 
     /// Number of commits reachable from HEAD (commit-per-mutation check).

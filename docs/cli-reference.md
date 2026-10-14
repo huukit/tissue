@@ -85,6 +85,34 @@ Read-only.
 
 ---
 
+## `tissue pull`
+
+Fetch the remote and rebase onto it — never a merge commit (#110).
+
+```sh
+tissue pull
+```
+
+On a textual conflict: aborts the rebase (tree untouched), names the affected
+issue ids, and tells you to resolve manually with plain git.
+
+---
+
+## `tissue push`
+
+Push to the remote — fast-forward only (#110).
+
+```sh
+tissue push                       # plain fast-forward
+tissue push --force-with-lease    # after your history was rebased
+```
+
+After `tissue pull` rebased your local commits, the plain push is usually
+still a fast-forward of the remote; `--force-with-lease` is the correct form
+when the remote moved again mid-rebase.
+
+---
+
 ## Projects (multi-project repos)
 
 A repo can hold several projects at once: a **project** is a named grouping of
