@@ -556,58 +556,6 @@ function renderMarkdown(src: string): string {
   return out.join("\n");
 }
 
-const TOKEN_KEY = "tissue-api-token";
-
-function getToken(): string {
-  return sessionStorage.getItem(TOKEN_KEY) ?? "";
-}
-
-function setToken(value: string): void {
-  sessionStorage.setItem(TOKEN_KEY, value);
-}
-
-async function postJson<T>(url: string, body: unknown): Promise<T> {
-  const token = getToken();
-  if (!token) throw new Error("no API token set — enter one in the token field first");
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(body),
-  });
-  const data = (await res.json().catch(() => null)) as { error?: string } | null;
-  if (!res.ok) {
-    throw new Error(data?.error ?? `request failed: ${res.status}`);
-  }
-  return data as T;
-}
-
-function tokenBoxHtml(): string {
-  return `
-    <div class="token-box">
-      <label for="api-token">API token</label>
-      <input id="api-token" type="password" autocomplete="off"
-             placeholder="paste token (kept in sessionStorage only)"
-             value="${esc(getToken())}">
-    </div>`;
-}
-
-function wireTokenBox(): void {
-  const input = document.getElementById("api-token") as HTMLInputElement | null;
-  if (input) {
-    input.addEventListener("change", () => setToken(input.value));
-  }
-}
-
-interface EditState {
-  id: string;
-  title: string;
-  status: string;
-  release: string;
-}
-
 function editFormHtml(issue: IssueDetail): string {
   return `
     <details class="edit-box">
@@ -630,7 +578,7 @@ function editFormHtml(issue: IssueDetail): string {
           <input id="edit-release" type="text" value="${esc(issue.release ?? "")}"
                  placeholder="e.g. v1.2.0 (empty = unscheduled)">
         </label>
-        <button id="edit-submit">Propose change</button>
+        <button id="edit-submit">Save changes</button>
         <button id="sync-btn" title="Record a human edit note in the agent stream">Add sync note</button>
       </div>
       <p id="edit-result" class="edit-result" aria-live="polite"></p>
@@ -747,13 +695,13 @@ async function renderDetail(id: string): Promise<void> {
       <a class="back-link" href="#/issues">&larr; All issues</a>
       <article class="detail">
         <h2>${esc(issue.id)} — ${esc(issue.title)} ${badgeHtml(issue.tags)}</h2>
-        ${tokenBoxHtml()}
+        ${tokenBarHtml()}
         <dl class="front-matter">${fm}</dl>
         ${editFormHtml(issue)}
         <div class="body">${renderMarkdown(issue.body)}</div>
         ${timeline}
       </article>`;
-    wireTokenBox();
+    bindTokenBar();
     wireEditForm(issue);
   } catch (e) {
     el.innerHTML = `<p class="error">${esc(e instanceof Error ? e.message : String(e))}</p>`;
