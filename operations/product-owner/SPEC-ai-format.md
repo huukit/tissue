@@ -32,7 +32,10 @@ Every line is one JSON object:
 - `id`: unique within the file; monotonic with `seq`.
 - `seq`: 1-based, strictly increasing, gap-free per file (cheap integrity check).
 - `refs`: optional list of record ids this record builds on or corrects.
-- `data`: type-specific payload, defined below.
+- `data`: type-specific payload, defined below. The record's type lives
+  **only** on the envelope — `data` is flat and never carries its own
+  `type` field (one canonical shape; readers accept the legacy
+  duplicate-tag form, writers never emit it, #106).
 
 ## Record types
 

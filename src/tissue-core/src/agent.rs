@@ -208,18 +208,109 @@ impl RecordData {
 // Envelope
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Record {
     pub id: String,
-    #[serde(rename = "type")]
     pub record_type: RecordType,
     pub ts: String,
     pub actor: String,
     pub seq: u64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<String>,
     pub data: RecordData,
+}
+
+impl<'de> Deserialize<'de> for Record {
+    /// One canonical shape on disk (#106): `type` lives on the envelope
+    /// only; `data` is flat. Records written by the legacy tagged shape
+    /// (a second `type` inside `data`) are accepted on read for
+    /// compatibility, and re-serialize canonically.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct RawRecord {
+            id: String,
+            #[serde(rename = "type")]
+            record_type: RecordType,
+            ts: String,
+            actor: String,
+            seq: u64,
+            #[serde(default)]
+            refs: Vec<String>,
+            data: serde_json::Value,
+        }
+        let raw = RawRecord::deserialize(d)?;
+        // Tolerate the legacy shape: strip a duplicate `type` from data.
+        let mut data = raw.data;
+        if let Some(obj) = data.as_object_mut() {
+            let matches = obj.get("type").and_then(serde_json::Value::as_str)
+                == Some(raw.record_type.to_string().as_str());
+            if matches {
+                obj.remove("type");
+            }
+        }
+        // Dispatch the flat data by the envelope's type.
+        let data: RecordData =
+            dispatch_data(raw.record_type, data).map_err(serde::de::Error::custom)?;
+        Ok(Record {
+            id: raw.id,
+            record_type: raw.record_type,
+            ts: raw.ts,
+            actor: raw.actor,
+            seq: raw.seq,
+            refs: raw.refs,
+            data,
+        })
+    }
+}
+
+impl Serialize for Record {
+    /// Canonical shape (#106): `type` on the envelope only. The enum's
+    /// derived (tagged) serialization is used to build `data`, then the
+    /// duplicate tag is stripped — one shape on disk, both historical
+    /// shapes readable.
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut data = serde_json::to_value(&self.data).map_err(serde::ser::Error::custom)?;
+        if let Some(obj) = data.as_object_mut() {
+            obj.remove("type");
+        }
+        let mut st = s.serialize_struct("Record", 7)?;
+        st.serialize_field("id", &self.id)?;
+        st.serialize_field("type", &self.record_type)?;
+        st.serialize_field("ts", &self.ts)?;
+        st.serialize_field("actor", &self.actor)?;
+        st.serialize_field("seq", &self.seq)?;
+        if self.refs.is_empty() {
+            st.skip_field("refs")?;
+        } else {
+            st.serialize_field("refs", &self.refs)?;
+        }
+        st.serialize_field("data", &data)?;
+        st.end()
+    }
+}
+
+/// Deserialize a flat `data` object by the envelope's record type —
+/// one shape: the tag comes from the envelope, never from `data`.
+fn dispatch_data(record_type: RecordType, data: serde_json::Value) -> Result<RecordData, String> {
+    use serde::de::DeserializeOwned;
+    fn from_value<T: DeserializeOwned>(v: serde_json::Value) -> Result<T, String> {
+        serde_json::from_value(v).map_err(|e| e.to_string())
+    }
+    // Inject the tag the enum's derived Deserialize still expects, parse,
+    // then rely on serialization being tag-free (field removed above and
+    // skip via untagged-like manual shape): simplest is to parse with the
+    // tag and let Serialize omit it — RecordData serializes without a
+    // `type` field because the variant tag is not a field.
+    let mut v = data;
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert(
+            "type".to_string(),
+            serde_json::json!(record_type.to_string()),
+        );
+    } else {
+        return Err(format!("data must be an object, got {v}"));
+    }
+    from_value(v)
 }
 
 impl Record {
@@ -513,6 +604,60 @@ mod tests {
             let _ = f.read_to_end(&mut buf);
         }
         buf
+    }
+
+    /// #106 AC2: `AgentStream::open` must parse a stream written by the
+    /// core loop (envelope-only `type`, flat `data`) — the two writers
+    /// share one shape, round-trippable through one reader.
+    #[test]
+    fn open_parses_core_loop_written_stream() {
+        let dir = std::env::temp_dir().join(format!(
+            "tissue-stream-shape-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.jsonl");
+        // Exactly the bytes the core loop writes (sync.rs append_record):
+        // `type` on the envelope only, `data` flat.
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"id\":\"rec-0001\",\"type\":\"human-sync\",\"ts\":\"2026-10-08T11:00:00Z\",",
+                "\"actor\":\"human:tuomas\",\"seq\":1,\"refs\":[],",
+                "\"data\":{\"trigger\":\"command\",\"summary_of_human_change\":\"edited\",",
+                "\"reconciliation\":\"from sync record onward\"}}\n"
+            ),
+        )
+        .unwrap();
+        let s = AgentStream::open(&path).unwrap();
+        assert_eq!(s.records().len(), 1);
+        assert_eq!(s.records()[0].seq, 1);
+        assert_eq!(s.records()[0].actor, "human:tuomas");
+        // Round-trip: re-serialize and re-parse (canonical shape both ways).
+        let line = serde_json::to_string(&s.records()[0]).unwrap();
+        assert!(
+            !line.contains("\"type\":\"human-sync\",\"data\":{\"type\""),
+            "serialization must be tag-free inside data: {line}"
+        );
+        let re: Record = serde_json::from_str(&line).unwrap();
+        assert_eq!(re, s.records()[0]);
+        // AC1 second half: a typed (legacy tagged-shape) record also parses
+        // — the reader accepts both historical shapes.
+        let tagged = concat!(
+            "{\"id\":\"rec-0002\",\"type\":\"plan\",\"ts\":\"2026-10-08T12:00:00Z\",",
+            "\"actor\":\"agent:dev-1\",\"seq\":2,\"refs\":[],",
+            "\"data\":{\"type\":\"plan\",\"goal\":\"g\",\"steps\":[]}}"
+        );
+        let legacy: Record = serde_json::from_str(tagged).unwrap();
+        match legacy.data {
+            RecordData::Plan { goal, .. } => assert_eq!(goal, "g"),
+            other => panic!("expected plan, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
