@@ -94,6 +94,25 @@ myproject-issues/
         agent.jsonl
 ```
 
+## Two machines, one issue repo
+
+The issue repo is a plain git repo, so two machines can share it through any
+remote (a bare repo on a NAS, GitHub, an SSH remote). Tissue keeps the history
+linear — no merge commits, ever:
+
+```sh
+tissue pull    # fetch + rebase; never a merge commit
+tissue push    # fast-forward only
+```
+
+The discipline is the same as any git-native tool: **pull before you work,
+push after you commit**. If both machines edited the same issue in
+incompatible ways, `tissue pull` refuses — it aborts the rebase, leaves the
+tree untouched, and names the affected issue ids. Resolve by hand with plain
+git (`git pull --rebase`, edit the marked text, `git rebase --continue`),
+then `tissue pull` again and `tissue push`. The #78 revision guard covers the
+record level; this covers the history level.
+
 ## Next
 
 - [Workflow](workflow.md) — the dual-format model and the daily loop
