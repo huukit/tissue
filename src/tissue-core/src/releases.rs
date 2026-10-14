@@ -270,10 +270,6 @@ impl Releases {
         }
         issue.set_release(Some(release_id.to_string()), now);
         issue.write(&issue_path)?;
-        self.repo.commit_all(
-            author,
-            &format!("release assign {issue_id} -> {release_id}"),
-        )?;
         self.append_record(
             release_id,
             json!({
@@ -283,6 +279,10 @@ impl Releases {
                 "refs": [issue_id],
                 "data": { "issue": issue_id, "release": release_id }
             }),
+        )?;
+        self.repo.commit_all(
+            author,
+            &format!("release assign {issue_id} -> {release_id}"),
         )?;
         Ok(())
     }
@@ -302,7 +302,6 @@ impl Releases {
         let mut release = release;
         release.set_status(ReleaseStatus::Cut, now);
         release.write(&path)?;
-        self.repo.commit_all(author, &format!("release cut {id}"))?;
         self.append_record(
             id,
             json!({
@@ -313,6 +312,7 @@ impl Releases {
                 "data": { "release": id, "tag": id }
             }),
         )?;
+        self.repo.commit_all(author, &format!("release cut {id}"))?;
         self.repo
             .create_tag(id, &format!("tissue release cut {id}"))?;
         Ok(())
@@ -380,6 +380,54 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0]["type"], "release-cut");
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn assign_and_cut_leave_clean_tree() {
+        let dir = std::env::temp_dir().join(format!(
+            "tissue-release-clean-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let repo = GitRepo::init(&dir).unwrap();
+        let releases = Releases::new(repo.clone());
+        let now = "2026-10-14T06:00:00Z";
+        releases.create("v1.0.0", "T", "b", now, &author()).unwrap();
+        // an issue to assign: build it via the git repo directly
+        let issue_dir = dir.join(".tissue/issues/IAM-1");
+        fs::create_dir_all(&issue_dir).unwrap();
+        let issue = crate::human::IssueFile::new(
+            "IAM-1",
+            "Title",
+            crate::human::IssueStatus::Open,
+            "b",
+            now,
+        )
+        .unwrap();
+        issue.write(&issue_dir.join("issue.md")).unwrap();
+        repo.commit_all(&author(), "create IAM-1: Title").unwrap();
+
+        releases
+            .assign("IAM-1", "v1.0.0", now, &author(), "human:t")
+            .unwrap();
+        // #100: the assignment record must be inside the mutation's own
+        // commit — the tree is clean right after assign.
+        let status = repo.status_porcelain().unwrap();
+        assert!(
+            status.trim().is_empty(),
+            "untracked files after assign: {status}"
+        );
+
+        releases.cut("v1.0.0", now, &author(), "human:t").unwrap();
+        let status = repo.status_porcelain().unwrap();
+        assert!(
+            status.trim().is_empty(),
+            "untracked files after cut: {status}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }

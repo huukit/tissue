@@ -79,6 +79,7 @@ fn git(root: &Path, args: &[&str]) -> Result<String> {
 }
 
 /// An issue repo: a git working tree containing `.tissue/`.
+#[derive(Clone)]
 pub struct Repo {
     root: PathBuf,
 }
@@ -159,6 +160,11 @@ impl Repo {
             ],
         )?;
         self.head_short()
+    }
+
+    /// Working-tree status in `--porcelain` form; empty when clean.
+    pub fn status_porcelain(&self) -> Result<String> {
+        git(&self.root, &["status", "--porcelain"])
     }
 
     /// Stage everything and create one commit; nothing if the tree is clean.
