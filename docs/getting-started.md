@@ -11,14 +11,14 @@ Grab the archive for your platform from the
 
 | Platform | File |
 |---|---|
-| Linux x86_64 | `tissue-x86_64-unknown-linux-musl.tar.gz` |
-| Windows x86_64 | `tissue-x86_64-pc-windows-msvc.zip` |
-| macOS ARM | `tissue-aarch64-apple-darwin.tar.gz` |
+| Linux x86_64 | `tissue-v<version>-x86_64-unknown-linux-musl.tar.gz` (versioned, e.g. `tissue-v0.1.4-x86_64-unknown-linux-musl.tar.gz`) |
+| Windows x86_64 | `tissue-v<version>-x86_64-pc-windows-msvc.zip` |
+| macOS ARM | `tissue-v<version>-aarch64-apple-darwin.tar.gz` |
 
 Verify the download against the published `.sha256` sidecar:
 
 ```sh
-sha256sum --check tissue-x86_64-unknown-linux-musl.tar.gz.sha256
+sha256sum --check tissue-v<version>-x86_64-unknown-linux-musl.tar.gz.sha256
 ```
 
 Unpack it and put the `tissue` binary (`tissue.exe` on Windows) on your

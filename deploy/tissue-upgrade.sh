@@ -13,13 +13,14 @@
 # Environment (may be overridden in tissue-upgrade.service):
 #   TISSUE_REPO_SLUG   GitHub owner/repo (default: huukit/tissue)
 #   TISSUE_BIN_DIR     install dir (default: /usr/local/bin)
-#   TISSUE_ASSET       release asset name (default: tissue-x86_64-unknown-linux-musl.tar.gz)
+#   TISSUE_ASSET       asset name pattern (default: tissue-v*-x86_64-unknown-linux-musl.tar.gz;
+#                      resolved against the release's asset list, so it is version-agnostic)
 
 set -euo pipefail
 
 REPO_SLUG="${TISSUE_REPO_SLUG:-huukit/tissue}"
 BIN_DIR="${TISSUE_BIN_DIR:-/usr/local/bin}"
-ASSET="${TISSUE_ASSET:-tissue-x86_64-unknown-linux-musl.tar.gz}"
+ASSET_PATTERN="${TISSUE_ASSET:-tissue-v*-x86_64-unknown-linux-musl.tar.gz}"
 BIN_PATH="${BIN_DIR}/tissue"
 ROLLBACK_PATH="${BIN_DIR}/tissue.previous"
 WORK="$(mktemp -d)"
@@ -35,6 +36,31 @@ if [ -z "$latest_tag" ]; then
     log "could not determine the latest release tag"
     exit 1
 fi
+
+# Resolve the concrete asset from the release's asset list (#115: names
+# are versioned, so nothing is hardcoded). The pattern is a shell glob,
+# matched with `case` (NOT grep -x: in grep, `*` is a regex quantifier,
+# not a glob wildcard, and the pattern can never match).
+latest_assets="$(curl -fsSL --max-time 30 \
+    "https://api.github.com/repos/${REPO_SLUG}/releases/latest" \
+    | grep -o '"name": *"tissue-[^"]*"' \
+    | sed -E 's/.*"name": *"([^"]+)".*/\1/')"
+ASSET=""
+# shellcheck disable=SC2254 # $ASSET_PATTERN is unquoted on purpose: the
+# pattern is a user-overridable glob, and case-branch globs are how it
+# matches versioned asset names.
+while IFS= read -r a; do
+    case "$a" in
+        $ASSET_PATTERN) ASSET="$a"; break ;;
+    esac
+done <<EOF2
+$latest_assets
+EOF2
+if [ -z "$ASSET" ]; then
+    log "no asset matching ${ASSET_PATTERN} in the latest release"
+    exit 1
+fi
+log "resolved asset: ${ASSET}"
 
 # Content-based currency check (#88): `--version` is NOT trusted — published
 # binaries have carried a stale version string before (v0.1.1 reported 0.1.0).
