@@ -43,6 +43,18 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
           shellcheck deploy/tissue-upgrade.sh
+      - name: release assets are version-named (#115)
+        run: |
+          # No versionless release-asset names anywhere: release.yml builds
+          # tissue-v<version>-<target>.tar.gz; deploy/docs must not hardcode
+          # the old pattern.
+          if grep -rn -E 'tissue-(x86_64|aarch64)-[a-z0-9-]+\.(tar\.gz|zip)' \
+              deploy/ docs/ README.md .github/workflows/release.yml \
+              | grep -v 'tissue-v<version>-' | grep -v 'tissue-v\*' ; then
+            echo "::error::versionless release asset name found (see matches above)"
+            exit 1
+          fi
+          echo "OK: all release asset references are version-named"
 
   rust:
     name: fmt / check / clippy / test / audit / gui tsc
