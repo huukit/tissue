@@ -1,9 +1,16 @@
 /**
- * Tissue read-only issue viewer — frontend (#30, Dev 4 slice).
+ * Tissue read-only issue viewer — frontend (#30 slice, #96 Stage 1 shell).
  *
  * Contract with the local server (see coordination issue #1):
  *   GET /api/issues        -> { issues: IssueSummary[] }
  *   GET /api/issues/:id    -> { issue: IssueDetail } | 404 { error }
+ *   GET /api/releases      -> [{ id, title, status, created, updated }]
+ *
+ * Stage 1 (#96): app shell with sidebar navigation
+ * (Issues / Needs Review / Releases), a project switcher derived from
+ * issue-ID prefixes (honoring serve's --project filter when the server
+ * already scopes the data), status filtering, and search by id/title.
+ * Releases and Needs Review render placeholder views in this stage.
  *
  * Read-only by construction: only GET fetches, no mutating controls.
  * Markdown is rendered by a small, escape-first renderer: all input
@@ -25,7 +32,18 @@ interface IssueDetail extends IssueSummary {
   body: string;
 }
 
+interface ReleaseSummary {
+  id: string;
+  title: string;
+  status: string;
+  created: string;
+  updated: string;
+}
+
 const NEEDS_REVIEW = "needs-review";
+
+/** App state: the full issue list plus the current view/filters. */
+let allIssues: IssueSummary[] = [];
 
 const app = () => {
   const el = document.getElementById("app");
@@ -68,7 +86,7 @@ function rowHtml(issue: IssueSummary): string {
   const updated = esc(new Date(issue.updated).toLocaleString());
   return `<li class="issue-row">
     <span class="issue-id">${esc(issue.id)}</span>
-    <a class="issue-link issue-title" href="#/${encodeURIComponent(issue.id)}">${title}</a>
+    <a class="issue-link issue-title" href="#/issue/${encodeURIComponent(issue.id)}">${title}</a>
     <span class="status ${statusClass(issue.status)}">${esc(issue.status)}</span>
     ${badgeHtml(issue.tags)}
     <span class="issue-updated" title="updated">${updated}</span>
@@ -80,20 +98,115 @@ function issueNumber(id: string): number {
   return m ? parseInt(m[2], 10) : Number.MAX_SAFE_INTEGER;
 }
 
-async function renderList(): Promise<void> {
+/** Project = issue-ID prefix (e.g. IAM-1 -> IAM). */
+function projectOf(id: string): string {
+  const m = /^([A-Z]+)-\d+$/.exec(id);
+  return m ? m[1] : "";
+}
+
+/** Distinct projects present in the loaded issues, sorted. */
+function knownProjects(issues: IssueSummary[]): string[] {
+  const set = new Set<string>();
+  for (const i of issues) {
+    const p = projectOf(i.id);
+    if (p) set.add(p);
+  }
+  return [...set].sort();
+}
+
+/** Populate the project switcher from the issue data. */
+function populateProjectSelect(issues: IssueSummary[]): void {
+  const select = document.getElementById("project-select") as HTMLSelectElement | null;
+  if (!select) return;
+  const current = select.value;
+  const projects = knownProjects(issues);
+  // Rebuild options: "All projects" + one per prefix.
+  select.innerHTML =
+    `<option value="">All projects</option>` +
+    projects.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("");
+  // Keep the previous selection if still valid (e.g. hash links).
+  if (projects.includes(current)) select.value = current;
+}
+
+function activeProject(): string {
+  const select = document.getElementById("project-select") as HTMLSelectElement | null;
+  return select ? select.value : "";
+}
+
+function activeStatus(): string {
+  const m = /[#?]status=([^&]+)/.exec(window.location.hash);
+  return m ? decodeURIComponent(m[1]) : "";
+}
+
+function applyFilters(issues: IssueSummary[]): IssueSummary[] {
+  const project = activeProject();
+  const status = activeStatus();
+  let out = issues;
+  if (project) out = out.filter((i) => projectOf(i.id) === project);
+  if (status) out = out.filter((i) => i.status === status);
+  return out;
+}
+
+function searchMatches(issue: IssueSummary, q: string): boolean {
+  if (!q) return true;
+  const needle = q.toLowerCase();
+  return (
+    issue.id.toLowerCase().includes(needle) ||
+    issue.title.toLowerCase().includes(needle)
+  );
+}
+
+function searchInputHtml(): string {
+  return `<input type="search" id="search" class="search" placeholder="Search id or title…" aria-label="Search issues">`;
+}
+
+function bindSearch(): void {
+  const input = document.getElementById("search") as HTMLInputElement | null;
+  if (!input) return;
+  input.addEventListener("input", () => {
+    const q = input.value;
+    const visible = applyFilters(allIssues).filter((i) => searchMatches(i, q));
+    const list = document.getElementById("issue-list");
+    if (list) {
+      list.innerHTML =
+        visible.length > 0
+          ? visible.map(rowHtml).join("")
+          : `<li class="empty-row">No matching issues.</li>`;
+    }
+  });
+}
+
+function renderIssueList(): void {
   const el = app();
   if (!el) return;
-  try {
-    const data = await fetchJson<{ issues: IssueSummary[] }>("/api/issues");
-    const issues = [...data.issues].sort((a, b) => issueNumber(a.id) - issueNumber(b.id));
-    if (issues.length === 0) {
-      el.innerHTML = `<p class="loading">No issues found in this issue repo.</p>`;
-      return;
-    }
-    el.innerHTML = `<ul class="issue-list">${issues.map(rowHtml).join("")}</ul>`;
-  } catch (e) {
-    el.innerHTML = `<p class="error">${esc(e instanceof Error ? e.message : String(e))}</p>`;
+  const visible = applyFilters(allIssues);
+  if (visible.length === 0) {
+    el.innerHTML = `<p class="loading">No issues found in this issue repo.</p>`;
+    return;
   }
+  el.innerHTML = `
+    ${searchInputHtml()}
+    <ul class="issue-list" id="issue-list">${visible.map(rowHtml).join("")}</ul>`;
+  bindSearch();
+}
+
+function renderReviewQueue(): void {
+  const el = app();
+  if (!el) return;
+  const flagged = allIssues.filter((i) => i.tags.includes(NEEDS_REVIEW));
+  el.innerHTML = `
+    <h2 class="view-title">Needs Review</h2>
+    <p class="placeholder">The review queue arrives in Stage 3 (#98). Issues
+    currently tagged <code>needs-review</code> (${flagged.length}) are shown
+    with a badge in the Issues list.</p>`;
+}
+
+function renderReleases(): void {
+  const el = app();
+  if (!el) return;
+  el.innerHTML = `
+    <h2 class="view-title">Releases</h2>
+    <p class="placeholder">The releases view arrives in Stage 2 (#97).</p>`;
 }
 
 function renderInline(text: string): string {
@@ -113,17 +226,14 @@ function renderMarkdown(src: string): string {
   const lines = src.split("\n");
   let i = 0;
   let listType: "ul" | "ol" | null = null;
-
   const closeList = () => {
     if (listType) {
       out.push(`</${listType}>`);
       listType = null;
     }
   };
-
   while (i < lines.length) {
     const line = lines[i];
-
     if (/^```/.test(line.trim())) {
       closeList();
       const buf: string[] = [];
@@ -136,7 +246,6 @@ function renderMarkdown(src: string): string {
       out.push(`<pre><code>${esc(buf.join("\n"))}</code></pre>`);
       continue;
     }
-
     const h = /^(#{1,3})\s+(.*)$/.exec(line);
     if (h) {
       closeList();
@@ -144,7 +253,6 @@ function renderMarkdown(src: string): string {
       i++;
       continue;
     }
-
     const ul = /^\s*[-*]\s+(.*)$/.exec(line);
     const ol = /^\s*\d+\.\s+(.*)$/.exec(line);
     if (ul || ol) {
@@ -158,20 +266,17 @@ function renderMarkdown(src: string): string {
       i++;
       continue;
     }
-
     if (line.trim() === "") {
       closeList();
       i++;
       continue;
     }
-
     if (/^\s*>\s?/.test(line)) {
       closeList();
       out.push(`<blockquote><p>${renderInline(line.replace(/^\s*>\s?/, ""))}</p></blockquote>`);
       i++;
       continue;
     }
-
     closeList();
     const para: string[] = [line];
     i++;
@@ -204,7 +309,7 @@ async function renderDetail(id: string): Promise<void> {
       .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
       .join("");
     el.innerHTML = `
-      <a class="back-link" href="#">&larr; All issues</a>
+      <a class="back-link" href="#/issues">&larr; All issues</a>
       <article class="detail">
         <h2>${esc(issue.id)} — ${esc(issue.title)} ${badgeHtml(issue.tags)}</h2>
         <dl class="front-matter">${fm}</dl>
@@ -215,15 +320,63 @@ async function renderDetail(id: string): Promise<void> {
   }
 }
 
-function route(): void {
-  const hash = window.location.hash;
-  const m = /^#\/([^/]+)$/.exec(hash);
-  if (m) {
-    void renderDetail(decodeURIComponent(m[1]));
-  } else {
-    void renderList();
+/** Highlight the active nav link for the current view. */
+function updateNav(view: string): void {
+  document.querySelectorAll<HTMLElement>(".nav-link").forEach((a) => {
+    a.classList.toggle("active", a.dataset.view === view);
+  });
+  document.querySelectorAll<HTMLElement>(".filter-link").forEach((a) => {
+    a.classList.toggle("active", (a.dataset.status ?? "") === activeStatus());
+  });
+}
+
+async function loadIssues(): Promise<void> {
+  try {
+    const data = await fetchJson<{ issues: IssueSummary[] }>("/api/issues");
+    allIssues = [...data.issues].sort((a, b) => issueNumber(a.id) - issueNumber(b.id));
+    populateProjectSelect(allIssues);
+  } catch (e) {
+    const el = app();
+    if (el) el.innerHTML = `<p class="error">${esc(e instanceof Error ? e.message : String(e))}</p>`;
   }
 }
 
-window.addEventListener("hashchange", route);
-route();
+async function route(): Promise<void> {
+  const hash = window.location.hash || "#/issues";
+  const detail = /^#\/issue\/([^/]+)$/.exec(hash);
+  if (detail) {
+    updateNav("");
+    await renderDetail(decodeURIComponent(detail[1]));
+    return;
+  }
+  await loadIssues();
+  const view = /^#\/(review|releases)/.exec(hash);
+  if (view && view[1] === "review") {
+    updateNav("review");
+    renderReviewQueue();
+    return;
+  }
+  if (view && view[1] === "releases") {
+    updateNav("releases");
+    renderReleases();
+    return;
+  }
+  updateNav("issues");
+  renderIssueList();
+}
+
+function init(): void {
+  const select = document.getElementById("project-select");
+  if (select) {
+    select.addEventListener("change", () => {
+      const el = app();
+      if (el && /^#\/(issues)?$/.test(window.location.hash || "#/issues")) {
+        renderIssueList();
+      }
+    });
+  }
+  window.addEventListener("hashchange", () => void route());
+  void route();
+}
+
+init();

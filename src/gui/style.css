@@ -22,20 +22,103 @@ body {
   line-height: 1.5;
 }
 
-header {
+.topbar {
   padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--border);
   background: var(--card);
 }
-
-header h1 { margin: 0; font-size: 1.4rem; }
-header h1 a { color: var(--text); text-decoration: none; }
+.topbar h1 { margin: 0; font-size: 1.4rem; }
+.topbar h1 a { color: var(--text); text-decoration: none; }
 .tagline { margin: 0; color: var(--muted); font-size: 0.85rem; }
 
-main { max-width: 60rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+.layout {
+  display: flex;
+  min-height: calc(100vh - 4rem);
+}
+
+.sidebar {
+  width: 13rem;
+  flex: 0 0 13rem;
+  padding: 1rem;
+  border-right: 1px solid var(--border);
+  background: var(--card);
+}
+
+.nav { list-style: none; margin: 0 0 1.5rem; padding: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+.nav-link {
+  display: block;
+  padding: 0.4rem 0.75rem;
+  border-radius: 6px;
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 500;
+}
+.nav-link:hover { background: var(--bg); text-decoration: none; }
+.nav-link.active { background: var(--accent); color: #fff; }
+
+.sidebar-heading {
+  margin: 0 0 0.4rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.project-select {
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  font: inherit;
+  color: var(--text);
+}
+
+.filter-block { margin-top: 1.5rem; }
+.status-filter { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+.filter-link {
+  display: block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 6px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  text-transform: none;
+}
+.filter-link:hover { background: var(--bg); }
+.filter-link.active { color: var(--accent); font-weight: 600; }
+
+.content {
+  flex: 1 1 auto;
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 1.5rem 1.5rem 3rem;
+  min-width: 0;
+}
 
 .loading, .error { color: var(--muted); padding: 2rem 0; text-align: center; }
 .error { color: #b00020; }
+
+.view-title { margin: 0 0 1rem; font-size: 1.2rem; }
+.placeholder {
+  color: var(--muted);
+  background: var(--card);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 1.5rem;
+}
+
+.search {
+  width: 100%;
+  max-width: 24rem;
+  display: block;
+  margin: 0 0 1rem;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  background: var(--card);
+}
 
 .issue-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
 
@@ -49,13 +132,10 @@ main { max-width: 60rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
   border-radius: 6px;
   flex-wrap: wrap;
 }
-
 .issue-row a.issue-link { color: var(--accent); text-decoration: none; font-weight: 600; }
 .issue-row a.issue-link:hover { text-decoration: underline; }
-
 .issue-id { color: var(--muted); font-family: ui-monospace, monospace; font-size: 0.9rem; min-width: 5rem; }
 .issue-title { flex: 1 1 16rem; }
-
 .status {
   font-size: 0.75rem;
   font-weight: 600;
@@ -78,6 +158,7 @@ main { max-width: 60rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
 }
 
 .issue-updated { color: var(--muted); font-size: 0.8rem; margin-left: auto; }
+.empty-row { color: var(--muted); padding: 1rem; text-align: center; list-style: none; }
 
 .detail { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 1.5rem; }
 .detail h2 { margin-top: 0; }
@@ -106,3 +187,8 @@ main { max-width: 60rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
 .body blockquote { border-left: 3px solid var(--border); margin: 0.6em 0; padding: 0.1em 1em; color: var(--muted); }
 .body table { border-collapse: collapse; }
 .body th, .body td { border: 1px solid var(--border); padding: 0.3rem 0.6rem; }
+
+@media (max-width: 45rem) {
+  .layout { flex-direction: column; }
+  .sidebar { width: auto; flex: none; border-right: none; border-bottom: 1px solid var(--border); }
+}

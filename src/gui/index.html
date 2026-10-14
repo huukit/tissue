@@ -3,17 +3,43 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Tissue — Issues</title>
+  <title>Tissue — Issue Viewer</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <h1><a href="#" id="home-link">Tissue</a></h1>
-    <p class="tagline">read-only issue viewer</p>
-  </header>
-  <main id="app">
-    <p class="loading">Loading…</p>
-  </main>
+  <div class="shell">
+    <header class="topbar">
+      <h1><a href="#" id="home-link">Tissue</a></h1>
+      <p class="tagline">read-only issue viewer</p>
+    </header>
+    <div class="layout">
+      <nav class="sidebar" aria-label="Main navigation">
+        <ul class="nav">
+          <li><a href="#/issues" class="nav-link" data-view="issues">Issues</a></li>
+          <li><a href="#/review" class="nav-link" data-view="review">Needs Review</a></li>
+          <li><a href="#/releases" class="nav-link" data-view="releases">Releases</a></li>
+        </ul>
+        <div class="project-block">
+          <h3 class="sidebar-heading">Project</h3>
+          <select id="project-select" class="project-select" aria-label="Project filter">
+            <option value="">All projects</option>
+          </select>
+        </div>
+        <div class="filter-block">
+          <h3 class="sidebar-heading">Status</h3>
+          <ul class="status-filter" id="status-filter">
+            <li><a href="#/issues?status=open" class="filter-link" data-status="open">open</a></li>
+            <li><a href="#/issues?status=in-progress" class="filter-link" data-status="in-progress">in-progress</a></li>
+            <li><a href="#/issues?status=closed" class="filter-link" data-status="closed">closed</a></li>
+            <li><a href="#/issues" class="filter-link" data-status="">all</a></li>
+          </ul>
+        </div>
+      </nav>
+      <main id="app" class="content">
+        <p class="loading">Loading…</p>
+      </main>
+    </div>
+  </div>
   <script src="app.js"></script>
 </body>
 </html>
