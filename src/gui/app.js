@@ -512,7 +512,7 @@ function editFormHtml(issue) {
     var _a;
     return `
     <details class="edit-box">
-      <summary>Edit front matter (proposes a change for review)</summary>
+      <summary>Edit front matter</summary>
       <div class="edit-fields">
         <label>Title
           <input id="edit-title" type="text" value="${esc(issue.title)}">
@@ -541,37 +541,35 @@ function wireEditForm(issue) {
     if (!submit || !sync || !result)
         return;
     submit.addEventListener("click", async () => {
-        var _a, _b;
+        var _a;
         result.textContent = "…";
         const title = document.getElementById("edit-title").value;
         const status = document.getElementById("edit-status").value;
         const release = document.getElementById("edit-release").value;
+        const changed = title !== issue.title || status !== issue.status || (release || "") !== ((_a = issue.release) !== null && _a !== void 0 ? _a : "");
+        if (!changed) {
+            result.textContent = "No changes — nothing to save.";
+            return;
+        }
         try {
-            const changed = [];
-            if (title !== issue.title) {
-                await postJson(`/api/issues/${encodeURIComponent(issue.id)}/propose`, { field: "title", current: issue.title, proposed: title, actor: "human:gui" });
-                changed.push("title");
-            }
-            if (status !== issue.status) {
-                await postJson(`/api/issues/${encodeURIComponent(issue.id)}/propose`, { field: "status", current: issue.status, proposed: status, actor: "human:gui" });
-                changed.push("status");
-            }
-            if ((release || "") !== ((_a = issue.release) !== null && _a !== void 0 ? _a : "")) {
-                await postJson(`/api/issues/${encodeURIComponent(issue.id)}/propose`, { field: "release", current: (_b = issue.release) !== null && _b !== void 0 ? _b : "", proposed: release, actor: "human:gui" });
-                changed.push("release");
-            }
-            if (changed.length === 0) {
-                result.textContent = "No changes — nothing proposed.";
-            }
-            else {
-                result.textContent = `Proposed: ${changed.join(", ")} — awaiting review (tagged needs-review).`;
-                void route();
-            }
+            // Direct human edit (decision 4: humans are the authority on the
+            // human format) guarded by the revision the form loaded with (#78).
+            await postJson(`/api/issues/${encodeURIComponent(issue.id)}/edit`, {
+                expected_revision: issue.revision,
+                title,
+                status,
+                release,
+                actor: "human:gui",
+            });
+            result.textContent = "Saved — front matter updated.";
+            void route();
         }
         catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
-            result.textContent = /current|stale|mismatch|revision/i.test(msg)
-                ? `Changed while you were editing — re-open the issue and re-apply your edit. (${msg})`
+            result.textContent = /CONFLICT|changed while you were editing|revision/i.test(msg)
+                ? "Changed while you were editing — re-open the issue and re-apply your edit. (" +
+                    msg.replace(/^CONFLICT:?\s*/i, "") +
+                    ")"
                 : msg;
         }
     });
@@ -583,8 +581,8 @@ function wireEditForm(issue) {
             return;
         }
         try {
-            const r = await postJson(`/api/issues/${encodeURIComponent(issue.id)}/sync`, { summary, actor: "human:gui" });
-            result.textContent = `Recorded (commit ${r.commit}). Agents reconcile from this note.`;
+            await postJson(`/api/issues/${encodeURIComponent(issue.id)}/sync`, { summary, actor: "human:gui" });
+            result.textContent = "Recorded. Agents reconcile from this note.";
         }
         catch (e) {
             result.textContent = e instanceof Error ? e.message : String(e);

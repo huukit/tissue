@@ -681,7 +681,14 @@ fn api_issue_detail(stream: &mut TcpStream, repo: &Path, id: &str) -> Result<(),
     // {"issue": {<summary fields>, "body": "raw markdown"}}
     let mut summary = issue_summary_json(&issue);
     summary.pop();
-    let body = "{\"issue\":".to_string() + &summary + ",\"body\":" + &json_str(&issue.body) + "}}";
+    // revision exposed so GUI edits can send expected_revision (#99).
+    let body = "{\"issue\":".to_string()
+        + &summary
+        + ",\"revision\":"
+        + &issue.revision.to_string()
+        + ",\"body\":"
+        + &json_str(&issue.body)
+        + "}}";
     respond_json(stream, 200, &body)
 }
 

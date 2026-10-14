@@ -35,6 +35,7 @@ interface IssueSummary {
 }
 
 interface IssueDetail extends IssueSummary {
+  revision: number;
   body: string;
 }
 
@@ -610,7 +611,7 @@ interface EditState {
 function editFormHtml(issue: IssueDetail): string {
   return `
     <details class="edit-box">
-      <summary>Edit front matter (proposes a change for review)</summary>
+      <summary>Edit front matter</summary>
       <div class="edit-fields">
         <label>Title
           <input id="edit-title" type="text" value="${esc(issue.title)}">
@@ -646,39 +647,33 @@ function wireEditForm(issue: IssueDetail): void {
     const title = (document.getElementById("edit-title") as HTMLInputElement).value;
     const status = (document.getElementById("edit-status") as HTMLSelectElement).value;
     const release = (document.getElementById("edit-release") as HTMLInputElement).value;
+    const changed =
+      title !== issue.title || status !== issue.status || (release || "") !== (issue.release ?? "");
+    if (!changed) {
+      result.textContent = "No changes — nothing to save.";
+      return;
+    }
     try {
-      const changed: string[] = [];
-      if (title !== issue.title) {
-        await postJson<{ proposal_id: string }>(
-          `/api/issues/${encodeURIComponent(issue.id)}/propose`,
-          { field: "title", current: issue.title, proposed: title, actor: "human:gui" }
-        );
-        changed.push("title");
-      }
-      if (status !== issue.status) {
-        await postJson<{ proposal_id: string }>(
-          `/api/issues/${encodeURIComponent(issue.id)}/propose`,
-          { field: "status", current: issue.status, proposed: status, actor: "human:gui" }
-        );
-        changed.push("status");
-      }
-      if ((release || "") !== (issue.release ?? "")) {
-        await postJson<{ proposal_id: string }>(
-          `/api/issues/${encodeURIComponent(issue.id)}/propose`,
-          { field: "release", current: issue.release ?? "", proposed: release, actor: "human:gui" }
-        );
-        changed.push("release");
-      }
-      if (changed.length === 0) {
-        result.textContent = "No changes — nothing proposed.";
-      } else {
-        result.textContent = `Proposed: ${changed.join(", ")} — awaiting review (tagged needs-review).`;
-        void route();
-      }
+      // Direct human edit (decision 4: humans are the authority on the
+      // human format) guarded by the revision the form loaded with (#78).
+      await postJson<{ edited: boolean }>(
+        `/api/issues/${encodeURIComponent(issue.id)}/edit`,
+        {
+          expected_revision: issue.revision,
+          title,
+          status,
+          release,
+          actor: "human:gui",
+        }
+      );
+      result.textContent = "Saved — front matter updated.";
+      void route();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      result.textContent = /current|stale|mismatch|revision/i.test(msg)
-        ? `Changed while you were editing — re-open the issue and re-apply your edit. (${msg})`
+      result.textContent = /CONFLICT|changed while you were editing|revision/i.test(msg)
+        ? "Changed while you were editing — re-open the issue and re-apply your edit. (" +
+          msg.replace(/^CONFLICT:?\s*/i, "") +
+          ")"
         : msg;
     }
   });
@@ -690,11 +685,11 @@ function wireEditForm(issue: IssueDetail): void {
       return;
     }
     try {
-      const r = await postJson<{ synced: string; commit: string }>(
+      await postJson<{ synced: boolean }>(
         `/api/issues/${encodeURIComponent(issue.id)}/sync`,
         { summary, actor: "human:gui" }
       );
-      result.textContent = `Recorded (commit ${r.commit}). Agents reconcile from this note.`;
+      result.textContent = "Recorded. Agents reconcile from this note.";
     } catch (e) {
       result.textContent = e instanceof Error ? e.message : String(e);
     }
