@@ -6,6 +6,7 @@
  *   GET /api/issues        -> { issues: IssueSummary[] }
  *   GET /api/issues/:id    -> { issue: IssueDetail } | 404 { error }
  *   GET /api/releases      -> [{ id, title, status, created, updated }]
+ *   GET /api/releases/:id  -> ReleaseDetail | 404 { error }  (Stage 2, #97)
  *
  * Stage 1 (#96): app shell with sidebar navigation
  * (Issues / Needs Review / Releases), a project switcher derived from
@@ -170,13 +171,74 @@ function renderReviewQueue() {
     currently tagged <code>needs-review</code> (${flagged.length}) are shown
     with a badge in the Issues list.</p>`;
 }
-function renderReleases() {
+async function renderReleases() {
     const el = app();
     if (!el)
         return;
-    el.innerHTML = `
-    <h2 class="view-title">Releases</h2>
-    <p class="placeholder">The releases view arrives in Stage 2 (#97).</p>`;
+    try {
+        const releases = await fetchJson("/api/releases");
+        if (releases.length === 0) {
+            el.innerHTML = `<p class="loading">No releases in this issue repo yet.</p>`;
+            return;
+        }
+        const rows = releases
+            .slice()
+            .sort((a, b) => b.id.localeCompare(a.id))
+            .map((r) => {
+            const cls = r.status === "cut" ? "status-closed" : "status-open";
+            return `<li class="issue-row">
+        <span class="issue-id">${esc(r.id)}</span>
+        <a class="issue-link issue-title" href="#/releases/${encodeURIComponent(r.id)}">${esc(r.title)}</a>
+        <span class="status ${cls}">${esc(r.status)}</span>
+        <span class="issue-updated" title="updated">${esc(new Date(r.updated).toLocaleString())}</span>
+      </li>`;
+        })
+            .join("");
+        el.innerHTML = `<ul class="issue-list">${rows}</ul>`;
+    }
+    catch (e) {
+        el.innerHTML = `<p class="error">${esc(e instanceof Error ? e.message : String(e))}</p>`;
+    }
+}
+async function renderReleaseDetail(id) {
+    var _a;
+    const el = app();
+    if (!el)
+        return;
+    try {
+        const data = await fetchJson(`/api/releases/${encodeURIComponent(id)}`);
+        const r = data.release;
+        const cls = r.status === "cut" ? "status-closed" : "status-open";
+        const fm = [
+            ["id", esc(r.id)],
+            ["status", `<span class="status ${cls}">${esc(r.status)}</span>`],
+            ["target", esc((_a = r.target) !== null && _a !== void 0 ? _a : "—")],
+            ["created", esc(r.created)],
+            ["updated", esc(r.updated)],
+        ]
+            .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
+            .join("");
+        const issues = data.issues.length
+            ? data.issues
+                .map((i) => `<li>
+            <span class="issue-id">${esc(i.id)}</span>
+            <a class="issue-link issue-title" href="#/${encodeURIComponent(i.id)}">${esc(i.title)}</a>
+            <span class="status ${statusClass(i.status)}">${esc(i.status)}</span>
+          </li>`)
+                .join("")
+            : `<li class="loading">(none assigned)</li>`;
+        el.innerHTML = `
+      <a class="back-link" href="#/releases">&larr; All releases</a>
+      <article class="detail">
+        <h2>${esc(r.id)} — ${esc(r.title)}</h2>
+        <dl class="front-matter">${fm}</dl>
+        <h3>Assigned issues</h3>
+        <ul class="issue-list">${issues}</ul>
+      </article>`;
+    }
+    catch (e) {
+        el.innerHTML = `<p class="error">${esc(e instanceof Error ? e.message : String(e))}</p>`;
+    }
 }
 function renderInline(text) {
     let s = esc(text);
@@ -315,6 +377,12 @@ async function route() {
     if (detail) {
         updateNav("");
         await renderDetail(decodeURIComponent(detail[1]));
+        return;
+    }
+    const releaseDetail = /^#\/releases\/([^/]+)$/.exec(hash);
+    if (releaseDetail) {
+        updateNav("releases");
+        await renderReleaseDetail(decodeURIComponent(releaseDetail[1]));
         return;
     }
     await loadIssues();

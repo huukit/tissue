@@ -140,6 +140,9 @@ fn api_route(
     if rest == "releases" {
         return api_releases(stream, repo);
     }
+    if let Some(id) = rest.strip_prefix("releases/") {
+        return api_release_detail(stream, repo, id);
+    }
     respond_json(stream, 404, "{\"error\":\"unknown api route\"}")
 }
 
@@ -231,6 +234,62 @@ fn api_releases(stream: &mut TcpStream, repo: &Path) -> Result<(), String> {
         }
     }
     let body = format!("[{}]", releases.join(","));
+    respond_json(stream, 200, &body)
+}
+
+/// GET /api/releases/{id}: release front matter + assigned issues
+/// (derived from issues' front-matter release links, matching the CLI's
+/// `release show` derivation via tissue-core::releases). Read-only.
+fn api_release_detail(stream: &mut TcpStream, repo: &Path, id: &str) -> Result<(), String> {
+    // Path-traversal safety: reject ids that are not a bare v+semver token.
+    if !tissue_core::human::valid_release_id(id) {
+        return respond_json(
+            stream,
+            404,
+            &format!("{{\"error\":\"release not found: {}\"}}", id),
+        );
+    }
+    let grepo = tissue_core::git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    let releases = tissue_core::releases::Releases::new(grepo);
+    let rel = match releases.load(id) {
+        Ok(r) => r,
+        Err(_) => {
+            return respond_json(
+                stream,
+                404,
+                &format!("{{\"error\":\"release not found: {}\"}}", id),
+            )
+        }
+    };
+    let assigned = releases
+        .assigned_issues(id)
+        .map_err(|e| format!("deriving assigned issues: {e}"))
+        .unwrap_or_default();
+    let issues: Vec<String> = assigned
+        .iter()
+        .map(|i| {
+            format!(
+                "{{\"id\":{},\"title\":{},\"status\":\"{}\"}}",
+                json_str(&i.id),
+                json_str(&i.title),
+                i.status.as_str()
+            )
+        })
+        .collect();
+    let target = rel
+        .target
+        .as_deref()
+        .map(|t| format!("\"target\":{},", json_str(t)))
+        .unwrap_or_default();
+    let body = format!(
+        "{{\"release\":{{\"id\":{},\"title\":{},\"status\":\"{}\",{target}\"created\":{},\"updated\":{}}},\"issues\":[{}]}}",
+        json_str(&rel.id),
+        json_str(&rel.title),
+        rel.status.as_str(),
+        json_str(&rel.created),
+        json_str(&rel.updated),
+        issues.join(",")
+    );
     respond_json(stream, 200, &body)
 }
 

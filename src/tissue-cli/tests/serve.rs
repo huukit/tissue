@@ -45,6 +45,16 @@ impl Scratch {
             "--proposed",
             "Renamed issue",
         ]);
+        // one release with one assigned issue (release-detail contract, #97)
+        s.tissue(&[
+            "release",
+            "create",
+            "v1.0.0",
+            "First cut",
+            "--body",
+            "## Goals",
+        ]);
+        s.tissue(&["release", "assign", "IAM-2", "v1.0.0"]);
         s
     }
 
@@ -276,6 +286,37 @@ fn serve_json_contract() {
     // Unknown API route: 404.
     let (status, _) = get(&addr, "/api/nope");
     assert!(status.contains("404"), "{status}");
+}
+
+#[test]
+fn serve_release_detail_contract() {
+    let scratch = Scratch::new("release-detail");
+    let server = start_server(&scratch);
+    let addr = server.addr;
+    // Detail: release front matter + assigned issues (derived from the
+    // issues' release links, matching `tissue release show`).
+    let (status, body) = get(&addr, "/api/releases/v1.0.0");
+    assert!(status.contains("200"), "{status}");
+    assert!(body.contains("\"release\""), "wrapper: {body}");
+    assert!(body.contains("\"v1.0.0\""), "id: {body}");
+    assert!(body.contains("First cut"), "title: {body}");
+    assert!(body.contains("\"draft\""), "status: {body}");
+    assert!(body.contains("\"issues\""), "assigned wrapper: {body}");
+    assert!(
+        body.contains("\"IAM-2\"") && body.contains("Second issue"),
+        "assigned issue: {body}"
+    );
+    assert!(
+        !body.contains("\"IAM-1\""),
+        "unassigned issue must not appear: {body}"
+    );
+    // Unknown release: JSON 404.
+    let (status, body) = get(&addr, "/api/releases/v9.9.9");
+    assert!(status.contains("404"), "{status}");
+    assert!(body.contains("error"), "404 body: {body}");
+    // Traversal-shaped id: refused as not-found (bare v+semver only).
+    let (status, _) = get(&addr, "/api/releases/..%2f..%2fetc");
+    assert!(status.contains("404"), "traversal id must 404: {status}");
 }
 
 #[test]
