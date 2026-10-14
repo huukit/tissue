@@ -80,8 +80,10 @@ toolchain, no node, no server dependencies.
 3. **View it** — `cd <your-project>-issues && tissue serve`, then open
    <http://127.0.0.1:7323>
 
-The viewer is read-only and loopback-only: it binds `127.0.0.1` exclusively
-and refuses every non-GET request — nothing is exposed beyond your machine.
+The viewer binds `127.0.0.1` exclusively — nothing is exposed beyond your
+machine. Reads need no token; write actions (approve/reject, edit, sync)
+require the repo's API token, entered once per browser session (kept in
+sessionStorage only, never on disk).
 
 Full walkthrough — install variants, all three init modes, sha256
 verification, and the standalone-issue-repo principle — lives in
