@@ -317,9 +317,14 @@ fn write_api_auth_failures_are_explicit() {
         .expect("count");
     assert!(count <= 4, "no phantom writes: {count} commits");
 
-    // GET on a write route is refused (read-only viewer)
-    let (status, _) = get(addr, "/api/issues/IAM-1/records");
+    // GET on a POST-only write route is refused (read-only viewer).
+    // records is now GET-readable (#98 timeline), so propose is the
+    // POST-only representative.
+    let (status, _) = get(addr, "/api/issues/IAM-1/propose");
     assert!(status.contains("405"), "GET on write route: {status}");
+    // ... and GET on records is a valid read (empty stream, no token).
+    let (status, _) = get(addr, "/api/issues/IAM-1/records");
+    assert!(status.contains("200"), "GET records read: {status}");
 }
 
 /// The write API never writes the human format directly (decision 4):

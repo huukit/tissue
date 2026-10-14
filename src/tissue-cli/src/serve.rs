@@ -9,6 +9,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 
 use tissue_core::human::{IssueFile, ReleaseFile};
+use tissue_core::state::Decision;
 
 /// GUI assets embedded at compile time so a standalone binary serves the
 /// viewer with no external files (#38 standalone path).
@@ -154,7 +155,13 @@ fn api_route(
     // Reads: GET only, loopback-only, tokenless. A GET on a write-only
     // subroute (records/propose) tells the caller to POST with a token.
     if let Some(t) = rest.strip_prefix("issues/") {
-        if matches!(t.rsplit_once('/'), Some((_, "records" | "propose"))) {
+        // records/proposals are GET-readable (#98 timeline/queue); only the
+        // POST-only writes (records append, propose, approve, reject) are
+        // refused with guidance on GET.
+        if matches!(
+            t.rsplit_once('/'),
+            Some((_, "propose" | "approve" | "reject"))
+        ) {
             return respond_json(
                 stream,
                 405,
@@ -167,6 +174,15 @@ fn api_route(
     }
     if rest == "issues" {
         return api_issues(stream, repo, project_prefix);
+    }
+    if let Some(tail) = rest.strip_prefix("issues/") {
+        if let Some((id, verb)) = tail.split_once('/') {
+            match verb {
+                "proposals" => return api_issue_proposals(stream, repo, id),
+                "records" => return api_issue_records(stream, repo, id),
+                _ => {}
+            }
+        }
     }
     if let Some(id) = rest.strip_prefix("issues/") {
         if id.contains('/') {
@@ -291,6 +307,8 @@ fn api_write_route(
         match verb {
             "records" => return api_write_append_record(stream, repo, id, payload),
             "propose" => return api_write_propose(stream, repo, id, payload),
+            "approve" => return api_write_decide(stream, repo, id, payload, Decision::Approve),
+            "reject" => return api_write_decide(stream, repo, id, payload, Decision::Reject),
             _ => {
                 return respond_json(stream, 404, "{\"error\":\"unknown api route\"}");
             }
@@ -368,6 +386,85 @@ fn api_write_append_record(
     };
     match crate::api_write::append_record(repo, id, actor_id, data) {
         Ok(seq) => respond_json(stream, 201, &format!("{{\"appended\":true,\"seq\":{seq}}}")),
+        Err(e) => respond_json(stream, 400, &format!("{{\"error\":{}}}", json_str(&e))),
+    }
+}
+
+/// GET /api/issues/<id>/proposals: pending proposals with review context.
+/// Read-only; serves the GUI Needs Review queue (#98).
+fn api_issue_proposals(stream: &mut TcpStream, repo: &Path, id: &str) -> Result<(), String> {
+    match crate::api_write::pending_proposals(repo, id) {
+        Ok(proposals) => {
+            let body = serde_json::to_string(&proposals).unwrap_or_else(|_| "[]".into());
+            respond_json(stream, 200, &body)
+        }
+        Err(e) => respond_json(stream, 404, &format!("{{\"error\":{}}}", json_str(&e))),
+    }
+}
+
+/// GET /api/issues/<id>/records: the agent stream for the timeline view.
+/// Read-only (#98).
+fn api_issue_records(stream: &mut TcpStream, repo: &Path, id: &str) -> Result<(), String> {
+    match crate::api_write::records(repo, id) {
+        Ok(records) => {
+            let body = serde_json::to_string(&records).unwrap_or_else(|_| "[]".into());
+            respond_json(stream, 200, &body)
+        }
+        Err(e) => respond_json(stream, 404, &format!("{{\"error\":{}}}", json_str(&e))),
+    }
+}
+
+/// POST /api/issues/<id>/approve and /reject: decide a proposal through
+/// the core loop — one commit, stream records identical to the CLI path.
+/// Token-protected like every write endpoint (#98).
+fn api_write_decide(
+    stream: &mut TcpStream,
+    repo: &Path,
+    id: &str,
+    payload: &str,
+    decision: Decision,
+) -> Result<(), String> {
+    let v = match parse_json_body(payload) {
+        Ok(v) => v,
+        Err(code) => {
+            return respond_json(
+                stream,
+                code,
+                "{\"error\":\"request body must be a JSON object: {\"proposal_id\",\"actor\",(reject)\"reason\"}\"}",
+            )
+        }
+    };
+    let Some(proposal_id) = json_field(&v, "proposal_id") else {
+        return respond_json(
+            stream,
+            400,
+            "{\"error\":\"body must have string fields: proposal_id, (reject) reason, actor\"}",
+        );
+    };
+    let actor_id = json_field(&v, "actor").unwrap_or("human:gui");
+    let reason = json_field(&v, "reason");
+    if decision == Decision::Reject && reason.is_none() {
+        return respond_json(
+            stream,
+            400,
+            "{\"error\":\"rejections are data: a reason is required\"}",
+        );
+    }
+    match crate::api_write::decide(repo, id, proposal_id, decision, reason, actor_id) {
+        Ok(commit) => respond_json(
+            stream,
+            201,
+            &format!(
+                "{{\"decision\":{},\"proposal_id\":{},\"commit\":{}}}",
+                json_str(if decision == Decision::Approve {
+                    "approved"
+                } else {
+                    "rejected"
+                }),
+                json_str(proposal_id),
+                json_str(&commit)
+            ),
+        ),
         Err(e) => respond_json(stream, 400, &format!("{{\"error\":{}}}", json_str(&e))),
     }
 }

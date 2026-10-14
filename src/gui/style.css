@@ -192,3 +192,90 @@ body {
   .layout { flex-direction: column; }
   .sidebar { width: auto; flex: none; border-right: none; border-bottom: 1px solid var(--border); }
 }
+
+/* Stage 3 (#98): review surface — token bar, proposal cards, timeline. */
+.token-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 1.2rem;
+  flex-wrap: wrap;
+}
+.token-input {
+  flex: 0 1 16rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 4px;
+  background: var(--bg, #fff);
+  color: inherit;
+}
+.token-hint { font-size: 0.78rem; opacity: 0.7; }
+.btn {
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 4px;
+  background: var(--bg, #f6f6f6);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.btn:hover { filter: brightness(0.95); }
+.btn-ghost { background: transparent; }
+.btn-approve { border-color: #2c7a4b; color: #2c7a4b; }
+.btn-reject { border-color: #a33; color: #a33; }
+.proposal-list { list-style: none; padding: 0; }
+.proposal-card {
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  padding: 0.8rem 1rem;
+  margin-bottom: 0.8rem;
+}
+.proposal-head {
+  display: flex;
+  gap: 0.8rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.proposal-id { font-family: monospace; opacity: 0.8; }
+.proposal-field { font-size: 0.85rem; opacity: 0.85; }
+.proposal-diff { margin: 0.6rem 0; display: grid; gap: 0.25rem; }
+.diff-label {
+  display: inline-block;
+  min-width: 4.5rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+.diff-row code.proposed { font-weight: bold; }
+.proposal-rationale { opacity: 0.85; font-style: italic; margin: 0.4rem 0; }
+.proposal-actions { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem; }
+.proposal-result { font-size: 0.85rem; opacity: 0.9; }
+.timeline { margin-top: 1.5rem; }
+.timeline-record {
+  border-top: 1px solid var(--border, #eee);
+  padding: 0.35rem 0;
+}
+.timeline-record summary {
+  cursor: pointer;
+  display: flex;
+  gap: 1rem;
+  align-items: baseline;
+  list-style: none;
+}
+.rec-type {
+  font-family: monospace;
+  font-size: 0.8rem;
+  background: var(--bg, #eee);
+  border: 1px solid var(--border, #ccc);
+  border-radius: 3px;
+  padding: 0 0.35rem;
+}
+.rec-actor { font-size: 0.85rem; }
+.rec-ts { font-size: 0.78rem; opacity: 0.6; margin-left: auto; }
+.rec-data {
+  font-size: 0.8rem;
+  background: var(--bg, #f6f6f6);
+  border-radius: 4px;
+  padding: 0.5rem;
+  overflow-x: auto;
+}

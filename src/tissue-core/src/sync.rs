@@ -180,7 +180,10 @@ impl Core {
 
     /// Read and integrity-check the stream: every line parses, seq is
     /// strictly increasing and gap-free from 1 (SPEC-ai-format invariant 1).
-    fn read_stream(&self, issue_id: &str) -> Result<Vec<Value>> {
+    /// Read the issue's agent stream as raw JSON values (seq-checked).
+    /// Public read path for thin interface layers (serve API, #98): the
+    /// raw format is the on-disk truth; typed views are derived from it.
+    pub fn read_stream(&self, issue_id: &str) -> Result<Vec<Value>> {
         let path = self.stream_path(issue_id)?;
         let content = match fs::read_to_string(&path) {
             Ok(c) => c,

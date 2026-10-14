@@ -48,6 +48,37 @@ interface ReleaseDetail {
 
 const NEEDS_REVIEW = "needs-review";
 
+/** Stage 3 (#98): pending proposal as served by GET /api/issues/:id/proposals. */
+interface PendingProposal {
+  proposal_id: string;
+  state: string;
+  field: string;
+  current: string;
+  proposed: string;
+  rationale: string | null;
+  ts: string;
+}
+
+/** Agent-stream record as served by GET /api/issues/:id/records. */
+interface StreamRecord {
+  seq: number;
+  ts: string;
+  actor: string;
+  data: { type?: string; [k: string]: unknown };
+}
+
+/** API token, sessionStorage only — never persisted server-side (#98 AC5). */
+const TOKEN_KEY = "tissue-api-token";
+
+function getToken(): string {
+  return sessionStorage.getItem(TOKEN_KEY) ?? "";
+}
+
+function setToken(t: string): void {
+  if (t) sessionStorage.setItem(TOKEN_KEY, t);
+  else sessionStorage.removeItem(TOKEN_KEY);
+}
+
 /** App state: the full issue list plus the current view/filters. */
 let allIssues: IssueSummary[] = [];
 
@@ -64,6 +95,23 @@ function esc(s: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+async function postJson<T>(url: string, body: unknown): Promise<T> {
+  const token = getToken();
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  const data = (await res.json().catch(() => null)) as { error?: string } | null;
+  if (!res.ok) {
+    throw new Error(data?.error ?? `request failed: ${res.status}`);
+  }
+  return data as T;
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -196,15 +244,159 @@ function renderIssueList(): void {
   bindSearch();
 }
 
-function renderReviewQueue(): void {
+interface ProposalForQueue {
+  issue: IssueSummary;
+  proposal: PendingProposal;
+}
+
+/** Token field (sessionStorage only) + hint text; shown when no token. */
+function tokenBarHtml(): string {
+  const has = !!getToken();
+  return `<div class="token-bar">
+    <input type="password" id="api-token" class="token-input"
+      placeholder="API token (sessionStorage only)" aria-label="API token"
+      autocomplete="off">
+    <button id="token-save" class="btn">${has ? "Update token" : "Save token"}</button>
+    ${has ? `<button id="token-clear" class="btn btn-ghost">Clear</button>` : ""}
+    <span class="token-hint">stored in this browser session only — never sent to disk</span>
+  </div>`;
+}
+
+function bindTokenBar(): void {
+  const save = document.getElementById("token-save");
+  const input = document.getElementById("api-token") as HTMLInputElement | null;
+  if (save && input) {
+    save.addEventListener("click", () => {
+      setToken(input.value.trim());
+      void route();
+    });
+  }
+  const clear = document.getElementById("token-clear");
+  if (clear) {
+    clear.addEventListener("click", () => {
+      setToken("");
+      void route();
+    });
+  }
+}
+
+function proposalCardHtml(entry: ProposalForQueue): string {
+  const p = entry.proposal;
+  return `<li class="proposal-card" id="proposal-${esc(p.proposal_id)}">
+    <div class="proposal-head">
+      <a class="issue-link issue-id" href="#/issue/${encodeURIComponent(entry.issue.id)}">${esc(entry.issue.id)}</a>
+      <span class="proposal-id">${esc(p.proposal_id)}</span>
+      <span class="proposal-field">field: <code>${esc(p.field)}</code></span>
+    </div>
+    <div class="proposal-diff">
+      <div class="diff-row"><span class="diff-label">current</span> <code>${esc(p.current)}</code></div>
+      <div class="diff-row"><span class="diff-label">proposed</span> <code class="proposed">${esc(p.proposed)}</code></div>
+    </div>
+    ${p.rationale ? `<p class="proposal-rationale">${esc(p.rationale)}</p>` : ""}
+    <div class="proposal-actions">
+      <button class="btn btn-approve" data-issue="${esc(entry.issue.id)}"
+        data-proposal="${esc(p.proposal_id)}">Approve</button>
+      <button class="btn btn-reject" data-issue="${esc(entry.issue.id)}"
+        data-proposal="${esc(p.proposal_id)}">Reject…</button>
+      <span class="proposal-result" data-result-for="${esc(p.proposal_id)}"></span>
+    </div>
+  </li>`;
+}
+
+async function decideFromGui(
+  issueId: string,
+  proposalId: string,
+  decision: "approve" | "reject"
+): Promise<void> {
+  const resultEl = document.querySelector(
+    `[data-result-for="${CSS.escape(proposalId)}"]`
+  );
+  const reason =
+    decision === "reject"
+      ? window.prompt(`Reason for rejecting ${proposalId} (required — rejections are data):`) ?? ""
+      : undefined;
+  if (decision === "reject" && !reason) {
+    if (resultEl) resultEl.textContent = "rejection requires a reason";
+    return;
+  }
+  try {
+    const res = await postJson<{ decision: string; commit: string }>(
+      `/api/issues/${encodeURIComponent(issueId)}/${decision}`,
+      {
+        proposal_id: proposalId,
+        ...(reason !== undefined ? { reason } : {}),
+        actor: "human:gui",
+      }
+    );
+    if (resultEl) {
+      resultEl.textContent = `${res.decision} (${res.commit.slice(0, 7)}) — refreshing…`;
+    }
+    await loadIssues();
+    await route();
+  } catch (e) {
+    if (resultEl) {
+      resultEl.textContent = e instanceof Error ? e.message : String(e);
+    }
+  }
+}
+
+function bindProposalActions(): void {
+  document.querySelectorAll<HTMLButtonElement>(".btn-approve").forEach((b) => {
+    b.addEventListener("click", () => {
+      const issue = b.dataset.issue ?? "";
+      const proposal = b.dataset.proposal ?? "";
+      void decideFromGui(issue, proposal, "approve");
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>(".btn-reject").forEach((b) => {
+    b.addEventListener("click", () => {
+      const issue = b.dataset.issue ?? "";
+      const proposal = b.dataset.proposal ?? "";
+      void decideFromGui(issue, proposal, "reject");
+    });
+  });
+}
+
+async function renderReviewQueue(): Promise<void> {
   const el = app();
   if (!el) return;
   const flagged = allIssues.filter((i) => i.tags.includes(NEEDS_REVIEW));
   el.innerHTML = `
     <h2 class="view-title">Needs Review</h2>
-    <p class="placeholder">The review queue arrives in Stage 3 (#98). Issues
-    currently tagged <code>needs-review</code> (${flagged.length}) are shown
-    with a badge in the Issues list.</p>`;
+    ${tokenBarHtml()}`;
+  bindTokenBar();
+  if (flagged.length === 0) {
+    el.insertAdjacentHTML(
+      "beforeend",
+      `<p class="placeholder">Nothing waiting for review. Proposals tagged
+      <code>needs-review</code> appear here.</p>`
+    );
+    return;
+  }
+  const entries: ProposalForQueue[] = [];
+  for (const issue of flagged) {
+    try {
+      const proposals = await fetchJson<PendingProposal[]>(
+        `/api/issues/${encodeURIComponent(issue.id)}/proposals`
+      );
+      for (const p of proposals) entries.push({ issue, proposal: p });
+    } catch {
+      // unreadable stream: the badge still shows in the issue list
+    }
+  }
+  if (entries.length === 0) {
+    el.insertAdjacentHTML(
+      "beforeend",
+      `<p class="placeholder">${flagged.length} issue(s) tagged needs-review but no
+      pending proposals could be read.</p>`
+    );
+    return;
+  }
+  el.insertAdjacentHTML(
+    "beforeend",
+    `<ul class="proposal-list">${entries.map(proposalCardHtml).join("")}</ul>`
+  );
+  bindProposalActions();
 }
 
 async function renderReleases(): Promise<void> {
@@ -376,12 +568,42 @@ async function renderDetail(id: string): Promise<void> {
     ]
       .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
       .join("");
+    // Agent-stream timeline (#98 AC4): all record types, collapsed by
+    // default — heavy agent activity must not break readability (#3).
+    let timeline = "";
+    try {
+      const records = await fetchJson<StreamRecord[]>(
+        `/api/issues/${encodeURIComponent(id)}/records`
+      );
+      if (records.length > 0) {
+        const rows = records
+          .map(
+            (r) => `<details class="timeline-record">
+            <summary>
+              <span class="rec-type">${esc(String(r.data.type ?? "?"))}</span>
+              <span class="rec-actor">${esc(r.actor)}</span>
+              <span class="rec-ts">${esc(r.ts)}</span>
+            </summary>
+            <pre class="rec-data">${esc(JSON.stringify(r.data, null, 2))}</pre>
+          </details>`
+          )
+          .join("");
+        timeline = `
+        <section class="timeline">
+          <h3>Agent stream (${records.length} record${records.length === 1 ? "" : "s"}, collapsed)</h3>
+          ${rows}
+        </section>`;
+      }
+    } catch {
+      // no stream or unreadable: the timeline section is simply omitted
+    }
     el.innerHTML = `
       <a class="back-link" href="#/issues">&larr; All issues</a>
       <article class="detail">
         <h2>${esc(issue.id)} — ${esc(issue.title)} ${badgeHtml(issue.tags)}</h2>
         <dl class="front-matter">${fm}</dl>
         <div class="body">${renderMarkdown(issue.body)}</div>
+        ${timeline}
       </article>`;
   } catch (e) {
     el.innerHTML = `<p class="error">${esc(e instanceof Error ? e.message : String(e))}</p>`;
@@ -427,7 +649,7 @@ async function route(): Promise<void> {
   const view = /^#\/(review|releases)/.exec(hash);
   if (view && view[1] === "review") {
     updateNav("review");
-    renderReviewQueue();
+    await renderReviewQueue();
     return;
   }
   if (view && view[1] === "releases") {

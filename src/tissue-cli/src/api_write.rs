@@ -127,3 +127,91 @@ pub fn propose(
     core.propose(id, &actor, &draft)
         .map_err(|e| format!("propose: {e}"))
 }
+
+/// POST /api/issues/<id>/approve and /reject: decide a proposal through
+/// the core loop — one commit, stream records identical to the CLI path.
+pub fn decide(
+    repo: &Path,
+    id: &str,
+    proposal_id: &str,
+    decision: tissue_core::state::Decision,
+    reason: Option<&str>,
+    actor_id: &str,
+) -> Result<String, String> {
+    if !valid_issue_id(id) {
+        return Err(format!(
+            "invalid issue id `{id}`: must match [A-Z]+-<number>"
+        ));
+    }
+    let grepo = git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    let core = Core::new(grepo);
+    let actor = actor_from(actor_id);
+    core.decide(id, &actor, &now_utc(), proposal_id, decision, reason)
+        .map_err(|e| format!("decide: {e}"))
+}
+
+/// GET /api/issues/<id>/proposals: pending proposals with enough context
+/// to review (field, current, proposed, rationale). Read-only.
+pub fn pending_proposals(repo: &Path, id: &str) -> Result<Vec<serde_json::Value>, String> {
+    if !valid_issue_id(id) {
+        return Err(format!(
+            "invalid issue id `{id}`: must match [A-Z]+-<number>"
+        ));
+    }
+    let grepo = git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    let core = Core::new(grepo);
+    let records = core
+        .read_stream(id)
+        .map_err(|e| format!("reading stream: {e}"))?;
+    let mut pending = Vec::new();
+    for r in &records {
+        let ty = r.get("type").and_then(|t| t.as_str());
+        if ty != Some("proposal") {
+            continue;
+        }
+        let data = r.get("data").cloned().unwrap_or(serde_json::Value::Null);
+        let pid = data.get("proposal_id").and_then(|p| p.as_str());
+        let Some(pid) = pid else { continue };
+        // Effective state: a later approval/rejection record for the same
+        // id decides it (append-only stream, records are never edited).
+        let decided = records.iter().rev().find_map(|r2| {
+            let ty2 = r2.get("type").and_then(|t| t.as_str())?;
+            if ty2 != "approval" && ty2 != "rejection" {
+                return None;
+            }
+            let d = r2.get("data")?;
+            if d.get("proposal_id").and_then(|p| p.as_str()) == Some(pid) {
+                Some(ty2)
+            } else {
+                None
+            }
+        });
+        if decided.is_some() {
+            continue;
+        }
+        pending.push(serde_json::json!({
+            "proposal_id": pid,
+            "state": "proposed",
+            "field": data.get("field").cloned().unwrap_or(serde_json::Value::Null),
+            "current": data.get("current").cloned().unwrap_or(serde_json::Value::Null),
+            "proposed": data.get("proposed").cloned().unwrap_or(serde_json::Value::Null),
+            "rationale": data.get("rationale").cloned().unwrap_or(serde_json::Value::Null),
+            "ts": r.get("ts").cloned().unwrap_or(serde_json::Value::Null),
+        }));
+    }
+    Ok(pending)
+}
+
+/// GET /api/issues/<id>/records: the agent stream for the timeline view.
+/// Read-only; returns raw records in seq order.
+pub fn records(repo: &Path, id: &str) -> Result<Vec<serde_json::Value>, String> {
+    if !valid_issue_id(id) {
+        return Err(format!(
+            "invalid issue id `{id}`: must match [A-Z]+-<number>"
+        ));
+    }
+    let grepo = git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    let core = Core::new(grepo);
+    core.read_stream(id)
+        .map_err(|e| format!("reading stream: {e}"))
+}
