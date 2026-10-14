@@ -4,6 +4,12 @@
 //! (STATE.md decision 4): create writes the initial issue.md (the
 //! creation, not a mutation of an existing human record), append adds
 //! an agent record, propose goes through the proposal loop.
+//!
+//! Stage 4 (#99) adds the two human-facing endpoints, both explicitly
+//! human-driven (GUI buttons, human actors): `sync` records a human edit
+//! in the AI stream via the core loop, and `edit` applies a human front-
+//! matter edit through the #78 revision guard (optimistic concurrency;
+//! conflicts refuse, never silently overwrite).
 
 use std::path::Path;
 
@@ -126,6 +132,84 @@ pub fn propose(
     };
     core.propose(id, &actor, &draft)
         .map_err(|e| format!("propose: {e}"))
+}
+
+/// POST /api/issues/<id>/sync: record a human edit in the AI stream —
+/// the sync button's server side (#99, decision 4's human->AI handoff).
+/// Same core path as the CLI: one `human-sync` record + one commit.
+pub fn sync(repo: &Path, id: &str, summary: &str, actor_id: &str) -> Result<(), String> {
+    let core = core_for(repo)?;
+    let actor = actor_from(actor_id);
+    core.sync(id, &actor, &now_utc(), summary)
+        .map_err(|e| format!("sync: {e}"))?;
+    Ok(())
+}
+
+/// POST /api/issues/<id>/edit: apply a human front-matter edit with the
+/// #78 revision guard. `expected_revision` is the `revision` the GUI
+/// read when it opened the form; if the file changed since, the edit is
+/// refused as a conflict (re-read and re-apply — no silent overwrite).
+pub fn edit_issue(
+    repo: &Path,
+    id: &str,
+    expected_revision: u64,
+    title: Option<&str>,
+    status: Option<&str>,
+    release: Option<&str>,
+    actor_id: &str,
+) -> Result<(), String> {
+    let dir = issue_dir(repo, id);
+    if !dir.is_dir() {
+        return Err(format!("issue {id} not found"));
+    }
+    let path = dir.join("issue.md");
+    let expected =
+        std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let mut issue = IssueFile::from_path(&path).map_err(|e| format!("parsing issue: {e}"))?;
+    if issue.revision != expected_revision {
+        return Err(format!(
+            "CONFLICT: issue changed while you were editing (revision is now {}, you edited {}) — re-read and re-apply",
+            issue.revision, expected_revision
+        ));
+    }
+    let now = now_utc();
+    if let Some(t) = title {
+        if t.contains('\n') {
+            return Err("title must be one line".into());
+        }
+        issue.set_title(t.to_string(), &now);
+    }
+    if let Some(s) = status {
+        let st = IssueStatus::parse(s).map_err(|e| format!("status: {e}"))?;
+        issue.set_status(st, &now);
+    }
+    if let Some(r) = release {
+        if !r.is_empty() && !tissue_core::human::valid_release_id(r) {
+            return Err(format!(
+                "release `{r}` is not v+semver (empty string unassigns)"
+            ));
+        }
+        let rel = if r.is_empty() {
+            None
+        } else {
+            Some(r.to_string())
+        };
+        issue.set_release(rel, &now);
+    }
+    issue
+        .write_if_unchanged(&path, &expected)
+        .map_err(|e| format!("edit: {e}"))?;
+    let grepo = git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    let actor = actor_from(actor_id);
+    grepo
+        .commit_all(&actor.author, &format!("edit {id} via api"))
+        .map_err(|e| format!("committing edit: {e}"))?;
+    Ok(())
+}
+
+fn core_for(repo: &Path) -> Result<Core, String> {
+    let grepo = git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    Ok(Core::new(grepo))
 }
 
 /// POST /api/issues/<id>/approve and /reject: decide a proposal through

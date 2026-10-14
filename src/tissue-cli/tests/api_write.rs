@@ -405,3 +405,93 @@ fn env_var_token_authenticates_without_config() {
         "read: {status}"
     );
 }
+
+#[test]
+fn gui_sync_endpoint_matches_cli_commit() {
+    let repo = Scratch::new("gui-sync");
+    repo.set_token("test-token-1");
+    repo.tissue(&["create", "IAM-1", "Synced issue", "--body", "b"]);
+    let server = start_server(&repo);
+    let addr = server.addr;
+    let before = repo.commit_count();
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues/IAM-1/sync",
+        r#"{"summary": "rewrote the summary", "actor": "human:tuomas"}"#,
+        Some("test-token-1"),
+    );
+    assert!(status.contains("201"), "sync: {status} body {body}");
+    assert_eq!(repo.commit_count(), before + 1, "sync = exactly one commit");
+    let log = repo.git(&["log", "-1", "--oneline"]);
+    assert!(log.contains("sync IAM-1"), "commit message shape: {log}");
+    let stream =
+        std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-1/agent.jsonl")).unwrap();
+    assert!(stream.contains("human-sync"), "record type: {stream}");
+    assert!(stream.contains("rewrote the summary"), "summary: {stream}");
+    // Auth still required: no token -> 401, wrong token -> 401.
+    let (status, _, _) = post(&addr, "/api/issues/IAM-1/sync", r#"{"summary":"x"}"#, None);
+    assert!(status.contains("401"), "no token: {status}");
+    let (status, _, _) = post(
+        &addr,
+        "/api/issues/IAM-1/sync",
+        r#"{"summary":"x"}"#,
+        Some("wrong"),
+    );
+    assert!(status.contains("401"), "wrong token: {status}");
+}
+
+#[test]
+fn gui_edit_endpoint_and_conflict_handling() {
+    let repo = Scratch::new("gui-edit");
+    repo.set_token("test-token-1");
+    repo.tissue(&["create", "IAM-1", "Editable", "--body", "b"]);
+    let server = start_server(&repo);
+    let addr = server.addr;
+    // Successful edit: revision 1 (fresh create) -> title + status change.
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues/IAM-1/edit",
+        r#"{"expected_revision": 1, "title": "Edited title", "status": "in-progress", "actor": "human:tuomas"}"#,
+        Some("test-token-1"),
+    );
+    assert!(status.contains("200"), "edit: {status} body {body}");
+    let issue = std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-1/issue.md")).unwrap();
+    assert!(issue.contains("Edited title"), "title applied: {issue}");
+    assert!(issue.contains("in-progress"), "status applied: {issue}");
+    assert!(
+        issue.contains("revision: 2"),
+        "revision bumped (write guard): {issue}"
+    );
+    // Conflict (AC2): a second edit claiming the stale revision 1 must 409
+    // with the re-apply message, not silently overwrite.
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues/IAM-1/edit",
+        r#"{"expected_revision": 1, "title": "Clobber attempt"}"#,
+        Some("test-token-1"),
+    );
+    assert!(
+        status.contains("409"),
+        "conflict must 409: {status} body {body}"
+    );
+    assert!(
+        body.contains("changed while you were editing"),
+        "conflict message: {body}"
+    );
+    assert!(body.contains("re-apply"), "recovery guidance: {body}");
+    let issue = std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-1/issue.md")).unwrap();
+    assert!(issue.contains("Edited title"), "no clobber: {issue}");
+    assert!(!issue.contains("Clobber"), "no clobber (title): {issue}");
+    // Invalid status refused with a clear 400.
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues/IAM-1/edit",
+        r#"{"expected_revision": 2, "status": "fixed"}"#,
+        Some("test-token-1"),
+    );
+    assert!(status.contains("400"), "bad status: {status} body {body}");
+    assert!(
+        body.contains("open, in-progress, closed"),
+        "enum hint: {body}"
+    );
+}

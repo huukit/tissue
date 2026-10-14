@@ -309,6 +309,8 @@ fn api_write_route(
             "propose" => return api_write_propose(stream, repo, id, payload),
             "approve" => return api_write_decide(stream, repo, id, payload, Decision::Approve),
             "reject" => return api_write_decide(stream, repo, id, payload, Decision::Reject),
+            "sync" => return api_write_sync(stream, repo, id, payload),
+            "edit" => return api_write_edit(stream, repo, id, payload),
             _ => {
                 return respond_json(stream, 404, "{\"error\":\"unknown api route\"}");
             }
@@ -512,6 +514,107 @@ fn api_write_propose(
             ),
         ),
         Err(e) => respond_json(stream, 400, &format!("{{\"error\":{}}}", json_str(&e))),
+    }
+}
+
+/// POST /api/issues/<id>/sync {"summary": "...", "actor": "human:..."}
+/// The sync button (#99 AC3): same core path as the CLI — one human-sync
+/// record + one commit with the same message shape.
+fn api_write_sync(
+    stream: &mut TcpStream,
+    repo: &Path,
+    id: &str,
+    payload: &str,
+) -> Result<(), String> {
+    let v = match parse_json_body(payload) {
+        Ok(v) => v,
+        Err(code) => {
+            return respond_json(
+                stream,
+                code,
+                "{\"error\":\"request body must be a JSON object: {\"summary\",(\"actor\")}\"}",
+            )
+        }
+    };
+    let Some(summary) = json_field(&v, "summary") else {
+        return respond_json(
+            stream,
+            400,
+            "{\"error\":\"body must have a string field: summary (what changed and why)\"}",
+        );
+    };
+    let actor_id = json_field(&v, "actor").unwrap_or("human:gui");
+    match crate::api_write::sync(repo, id, summary, actor_id) {
+        Ok(()) => respond_json(stream, 201, "{\"synced\":true}"),
+        Err(e) => respond_json(
+            stream,
+            400,
+            &format!("\"error\":{}}}", json_str(&e)).replace("\"error\"", "{\"error\""),
+        ),
+    }
+}
+
+/// POST /api/issues/<id>/edit: human front-matter edit with the #78
+/// revision guard. {"expected_revision": N, optional "title"/"status"/
+/// "release", "actor": "human:..."}. Conflict => 409 with the re-read-
+/// and-re-apply message; never a silent overwrite (#99 AC2).
+fn api_write_edit(
+    stream: &mut TcpStream,
+    repo: &Path,
+    id: &str,
+    payload: &str,
+) -> Result<(), String> {
+    let v = match parse_json_body(payload) {
+        Ok(v) => v,
+        Err(code) => {
+            return respond_json(
+                stream,
+                code,
+                "{\"error\":\"request body must be a JSON object: {\"expected_revision\", optional \"title\"/\"status\"/\"release\", (\"actor\")}\"}",
+            )
+        }
+    };
+    let Some(rev) = v
+        .get("expected_revision")
+        .and_then(serde_json::Value::as_u64)
+    else {
+        return respond_json(
+            stream,
+            400,
+            "{\"error\":\"body must have a numeric expected_revision (the revision you read)\"}",
+        );
+    };
+    let title = json_field(&v, "title");
+    let status = json_field(&v, "status");
+    let release = json_field(&v, "release");
+    if title.is_none() && status.is_none() && release.is_none() {
+        return respond_json(
+            stream,
+            400,
+            "{\"error\":\"nothing to edit: provide at least one of title, status, release\"}",
+        );
+    }
+    if let Some(s) = status {
+        if !matches!(s, "open" | "in-progress" | "closed") {
+            return respond_json(
+                stream,
+                400,
+                "{\"error\":\"status must be one of: open, in-progress, closed\"}",
+            );
+        }
+    }
+    let actor_id = json_field(&v, "actor").unwrap_or("human:gui");
+    match crate::api_write::edit_issue(repo, id, rev, title, status, release, actor_id) {
+        Ok(()) => respond_json(stream, 200, "{\"edited\":true}"),
+        Err(e) => {
+            let conflict = e.starts_with("CONFLICT:");
+            let code = if conflict { 409 } else { 400 };
+            respond_json(
+                stream,
+                code,
+                &format!("\"error\":{}}}", json_str(&e)).replace("\"error\"", "{\"error\""),
+            )
+        }
     }
 }
 
