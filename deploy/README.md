@@ -40,9 +40,9 @@ This is the only document you need for one-time setup.
 
    ```sh
    curl -fsSL -o /tmp/tissue.tar.gz \
-     https://github.com/huukit/tissue/releases/latest/download/tissue-x86_64-unknown-linux-musl.tar.gz
+     https://github.com/huukit/tissue/releases/latest/download/tissue-v<version>-x86_64-unknown-linux-musl.tar.gz
    curl -fsSL -o /tmp/tissue.tar.gz.sha256 \
-     https://github.com/huukit/tissue/releases/latest/download/tissue-x86_64-unknown-linux-musl.tar.gz.sha256
+     https://github.com/huukit/tissue/releases/latest/download/tissue-v<version>-x86_64-unknown-linux-musl.tar.gz.sha256
    cd /tmp && sha256sum -c tissue.tar.gz.sha256
    tar xzf tissue.tar.gz && install -m 0755 tissue /usr/local/bin/tissue
    ```
