@@ -13,7 +13,15 @@ use tissue_core::state::Decision;
 
 /// GUI assets embedded at compile time so a standalone binary serves the
 /// viewer with no external files (#38 standalone path).
-const GUI_INDEX_HTML: &str = include_str!("../../gui/index.html");
+const GUI_INDEX_HTML_RAW: &str = include_str!("../../gui/index.html");
+/// #143: the served index.html with the compiled-in version baked into the
+/// footer fallback (placeholder `__TISSUE_VERSION__` replaced once).
+static GUI_INDEX_HTML: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+fn gui_index_html() -> &'static str {
+    GUI_INDEX_HTML
+        .get_or_init(|| GUI_INDEX_HTML_RAW.replace("__TISSUE_VERSION__", tissue_core::VERSION))
+}
 const GUI_APP_JS: &str = include_str!("../../gui/app.js");
 const GUI_STYLE_CSS: &str = include_str!("../../gui/style.css");
 
@@ -208,6 +216,10 @@ fn api_route(
     if rest == "config" {
         return api_config_get(stream, repo);
     }
+    // #143: product/version/license/API-version metadata (tokenless read).
+    if rest == "meta" {
+        return api_meta(stream);
+    }
     if rest == "releases" {
         return api_releases(stream, repo);
     }
@@ -215,6 +227,21 @@ fn api_route(
         return api_release_detail(stream, repo, id);
     }
     respond_json(stream, 404, "{\"error\":\"unknown api route\"}")
+}
+
+/// GET /api/meta (#143): product metadata — tokenless read like every GET.
+/// Shape: {"product":"tissue","version":"…","api_version":"v1",
+/// "license":"GPL-3.0-only","license_url":"…","build":{"target":"…","profile":"release"}}.
+fn api_meta(stream: &mut TcpStream) -> Result<(), String> {
+    let body = format!(
+        "{{\"product\":\"tissue\",\"version\":{},\"api_version\":{},\"license\":{},\"license_url\":{},\"build\":{{\"target\":{},\"profile\":\"release\"}}}}",
+        json_str(tissue_core::VERSION),
+        json_str(tissue_core::API_VERSION),
+        json_str(tissue_core::LICENSE),
+        json_str("https://github.com/huukit/tissue/blob/main/LICENSE"),
+        json_str(tissue_core::BUILD_TARGET),
+    );
+    respond_json(stream, 200, &body)
 }
 
 /// GET /api/projects — the configured project mapping (tokenless read,
@@ -1079,7 +1106,7 @@ fn static_route(stream: &mut TcpStream, path: &str, gui_root: &Path) -> Result<(
         return respond_json(stream, 404, "{\"error\":\"not found\"}");
     }
     let (bytes, ctype) = match rel {
-        "index.html" => (GUI_INDEX_HTML.as_bytes(), "text/html; charset=utf-8"),
+        "index.html" => (gui_index_html().as_bytes(), "text/html; charset=utf-8"),
         "app.js" => (
             GUI_APP_JS.as_bytes(),
             "application/javascript; charset=utf-8",

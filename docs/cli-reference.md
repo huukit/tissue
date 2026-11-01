@@ -350,6 +350,25 @@ already-cut release fails. Commits: exactly one, `release cut <ID>`.
 - `GET /api/config` — tokenless read of the **whitelisted** config view: `project`, `remote`, `agent`. `api_token` is never returned.
 - `PUT /api/config` — token-protected write: a JSON object of top-level keys (`agent`, `remote`, `project`); `api_token` and any other key are rejected with 400 before anything is written. One `config update via api` commit per change. `{"agent": null}` removes the agent block (sync goes back to record-only).
 
+### Meta API (#143)
+
+`GET /api/meta` — tokenless read of product metadata:
+
+```json
+{"product": "tissue", "version": "0.1.4", "api_version": "v1",
+ "license": "GPL-3.0-only",
+ "license_url": "https://github.com/huukit/tissue/blob/main/LICENSE",
+ "build": {"target": "x86_64-unknown-linux-musl", "profile": "release"}}
+```
+
+`version` is the workspace version (the release workflow's tag guard keeps
+tag == version, #88); `build.target` is the compile-time target triple.
+`api_version` is a constant (`v1`) bumped **only on breaking changes** to
+the `/api/*` contract — clients should check it before relying on the API.
+The GUI footer shows `tissue v<version> · API <api_version> · <license>`
+on every view, fetched from this endpoint (with the compiled-in version as
+fallback).
+
 ### Projects API (#135)
 
 `serve` exposes the project mapping over HTTP — the same tissue-core

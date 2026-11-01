@@ -96,6 +96,16 @@ interface AgentRunOutcome {
   success: boolean;
 }
 
+/** #143: product metadata as served by GET /api/meta. */
+interface MetaInfo {
+  product: string;
+  version: string;
+  api_version: string;
+  license: string;
+  license_url?: string;
+  build?: { target?: string; profile?: string };
+}
+
 /** API token, sessionStorage only — never persisted server-side (#98 AC5). */
 const TOKEN_KEY = "tissue-api-token";
 
@@ -1087,7 +1097,25 @@ async function route(): Promise<void> {
   renderIssueList();
 }
 
+/** #143: footer line `tissue vX · API vN · LICENSE`, fetched from
+ * /api/meta on every load; the served HTML already carries the
+ * compiled-in version as the fallback if the fetch fails. */
+async function loadMetaFooter(): Promise<void> {
+  const el = document.getElementById("app-footer");
+  if (!el) return;
+  try {
+    const meta = await fetchJson<MetaInfo>("/api/meta");
+    const link = meta.license_url
+      ? ` <a href="${esc(meta.license_url)}" rel="noopener noreferrer" target="_blank">${esc(meta.license)}</a>`
+      : esc(meta.license);
+    el.innerHTML = `tissue v${esc(meta.version)} · API ${esc(meta.api_version)} · ${link}`;
+  } catch {
+    // meta unavailable: keep the compiled-in fallback already in the HTML
+  }
+}
+
 function init(): void {
+  void loadMetaFooter();
   const select = document.getElementById("project-select");
   if (select) {
     select.addEventListener("change", () => {

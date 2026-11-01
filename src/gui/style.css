@@ -441,3 +441,12 @@ body {
   font-size: 0.9rem;
   font-family: inherit;
 }
+
+/* #143: footer with version / API version / license, on every view. */
+.app-footer {
+  padding: 0.6rem 1.2rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+}
+.app-footer a { color: var(--accent); }

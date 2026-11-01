@@ -438,3 +438,45 @@ fn serve_rejects_path_traversal() {
         );
     }
 }
+
+/// #143 AC1/AC2: GET /api/meta returns version == workspace version,
+/// api_version, license, license_url, build.target; tokenless. And the
+/// served index.html carries the compiled-in version in the footer.
+#[test]
+fn serve_meta_endpoint_and_footer_version() {
+    let scratch = Scratch::new("meta");
+    let server = start_server(&scratch);
+    let addr = server.addr;
+
+    // /api/meta is a tokenless read.
+    let (status, body) = get(&addr, "/api/meta");
+    assert!(status.contains("200"), "{status} {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).expect("meta is JSON");
+    assert_eq!(v["product"], "tissue");
+    assert_eq!(
+        v["version"].as_str().unwrap(),
+        env!("CARGO_PKG_VERSION"),
+        "meta.version == workspace version"
+    );
+    assert!(v["api_version"].as_str().unwrap().starts_with('v'));
+    assert_eq!(v["license"], "GPL-3.0-only");
+    assert!(v["license_url"].as_str().unwrap().contains("LICENSE"));
+    assert!(v["build"]["target"].as_str().unwrap().contains("linux"));
+    assert_eq!(v["build"]["profile"], "release");
+
+    // The served index.html footer has the compiled-in version baked in
+    // (fallback when /api/meta is unreachable). Read the full body here —
+    // the shared `http` helper returns only the first body line.
+    let mut stream = TcpStream::connect(addr).expect("connect");
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .expect("write");
+    let mut full = String::new();
+    std::io::Read::read_to_string(&mut stream, &mut full).expect("read");
+    assert!(full.contains("200"), "{full}");
+    assert!(
+        full.contains(&format!("tissue v{}", env!("CARGO_PKG_VERSION"))),
+        "footer carries compiled-in version"
+    );
+    assert!(!full.contains("__TISSUE_VERSION__"), "placeholder replaced");
+}

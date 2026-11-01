@@ -978,7 +978,26 @@ async function route() {
     updateNav("issues");
     renderIssueList();
 }
+/** #143: footer line `tissue vX · API vN · LICENSE`, fetched from
+ * /api/meta on every load; the served HTML already carries the
+ * compiled-in version as the fallback if the fetch fails. */
+async function loadMetaFooter() {
+    const el = document.getElementById("app-footer");
+    if (!el)
+        return;
+    try {
+        const meta = await fetchJson("/api/meta");
+        const link = meta.license_url
+            ? ` <a href="${esc(meta.license_url)}" rel="noopener noreferrer" target="_blank">${esc(meta.license)}</a>`
+            : esc(meta.license);
+        el.innerHTML = `tissue v${esc(meta.version)} · API ${esc(meta.api_version)} · ${link}`;
+    }
+    catch (_a) {
+        // meta unavailable: keep the compiled-in fallback already in the HTML
+    }
+}
 function init() {
+    void loadMetaFooter();
     const select = document.getElementById("project-select");
     if (select) {
         select.addEventListener("change", () => {

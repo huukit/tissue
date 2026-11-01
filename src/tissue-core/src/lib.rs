@@ -15,6 +15,16 @@ pub mod sync;
 /// Crate version, for diagnostics.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// #143: the serve API's compatibility version. Bumped only on breaking
+/// changes to the `/api/*` contract (documented in docs/cli-reference.md).
+pub const API_VERSION: &str = "v1";
+
+/// #143: the workspace license, from the workspace `license` field.
+pub const LICENSE: &str = env!("CARGO_PKG_LICENSE");
+
+/// #143: build target triple, captured at compile time via build.rs.
+pub const BUILD_TARGET: &str = env!("TISSUE_BUILD_TARGET");
+
 #[cfg(test)]
 mod tests {
     #[test]
