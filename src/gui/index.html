@@ -24,6 +24,14 @@
           <select id="project-select" class="project-select" aria-label="Project filter">
             <option value="">All projects</option>
           </select>
+          <button id="new-project-btn" class="btn btn-ghost" title="Create a project (needs the API token)">+ New project</button>
+          <div id="new-project-form" class="new-project-form" hidden>
+            <input id="new-project-name" type="text" placeholder="name (e.g. ops)" aria-label="Project name">
+            <input id="new-project-prefix" type="text" placeholder="prefix (e.g. OPS)" aria-label="Issue-id prefix">
+            <button id="new-project-create" class="btn">Create</button>
+            <button id="new-project-cancel" class="btn btn-ghost">Cancel</button>
+            <p id="new-project-result" class="edit-result" aria-live="polite"></p>
+          </div>
         </div>
         <div class="filter-block">
           <h3 class="sidebar-heading">Status</h3>

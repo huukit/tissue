@@ -83,8 +83,9 @@ refused as stale.
 3. Edit `issue.md` as needed, then `tissue sync IAM-42 --summary ...`.
 4. `tissue serve` for the GUI: triage the needs-review queue, read
    proposals with before/after context, approve or reject them in the
-   browser, edit front matter (conflict-safe), and add sync notes —
-   every GUI action lands as the same git commit as its CLI twin.
+   browser, edit front matter (conflict-safe), sync your edits, and
+   create projects ("+ New project") — every GUI action lands as the
+   same git commit as its CLI twin.
 
 **Agent:**
 1. Read `issue.md` and `agent.jsonl` for full context.

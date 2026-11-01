@@ -198,6 +198,73 @@ function populateProjectSelect(issues: IssueSummary[]): void {
   if (projects.includes(current)) select.value = current;
 }
 
+/** #135: "+ New project" — create a project via POST /api/projects
+ * (token-protected) and repopulate the switcher. */
+function bindNewProject(): void {
+  const btn = document.getElementById("new-project-btn");
+  const form = document.getElementById("new-project-form");
+  if (!btn || !form) return;
+  btn.addEventListener("click", () => {
+    form.hidden = !form.hidden;
+    if (!form.hidden) {
+      const name = document.getElementById("new-project-name") as HTMLInputElement | null;
+      if (name) name.focus();
+    }
+  });
+  const cancel = document.getElementById("new-project-cancel");
+  cancel?.addEventListener("click", () => {
+    form.hidden = true;
+  });
+  // Prefill the prefix uppercase from the name as it is typed.
+  const nameEl = document.getElementById("new-project-name") as HTMLInputElement | null;
+  const prefixEl = document.getElementById("new-project-prefix") as HTMLInputElement | null;
+  nameEl?.addEventListener("input", () => {
+    if (prefixEl && nameEl) prefixEl.value = nameEl.value.toUpperCase().replace(/[^A-Z]/g, "");
+  });
+  const create = document.getElementById("new-project-create");
+  const result = document.getElementById("new-project-result");
+  create?.addEventListener("click", async () => {
+    if (!result || !nameEl || !prefixEl) return;
+    const name = nameEl.value.trim();
+    const prefix = prefixEl.value.trim();
+    if (!name || !prefix) {
+      result.textContent = "Both a name and an uppercase prefix are required (e.g. ops + OPS).";
+      return;
+    }
+    if (!/^[A-Z]+$/.test(prefix)) {
+      result.textContent = "The prefix must be uppercase ASCII letters (e.g. OPS).";
+      return;
+    }
+    result.textContent = "…";
+    try {
+      await postJson<{ created: boolean }>("/api/projects", { name, prefix, actor: "human:gui" });
+      result.textContent = `Created ${name} (${prefix}).`;
+      form.hidden = true;
+      nameEl.value = "";
+      prefixEl.value = "";
+      // Repopulate the switcher and select the new project.
+      await loadIssues();
+      const select = document.getElementById("project-select") as HTMLSelectElement | null;
+      if (select) {
+        const opt = Array.from(select.options).find((o) => o.value === prefix);
+        if (opt) select.value = prefix;
+        else {
+          const o = document.createElement("option");
+          o.value = prefix;
+          o.textContent = prefix;
+          select.add(o);
+          select.value = prefix;
+        }
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      result.textContent = /401|token/i.test(msg)
+        ? "Saving failed — set the API token first (it protects all write actions)."
+        : msg;
+    }
+  });
+}
+
 function activeProject(): string {
   const select = document.getElementById("project-select") as HTMLSelectElement | null;
   return select ? select.value : "";
@@ -787,6 +854,7 @@ function init(): void {
       }
     });
   }
+  bindNewProject();
   window.addEventListener("hashchange", () => void route());
   void route();
 }

@@ -179,6 +179,91 @@ fn get(addr: &SocketAddr, path: &str) -> (String, String) {
     http(addr, &req)
 }
 
+/// #135: GET /api/projects lists the mapping tokenless; POST /api/projects
+/// creates one with a commit through the same core module as the CLI —
+/// CLI/API parity for the same inputs, duplicate/invalid refused cleanly.
+#[test]
+fn projects_api_create_list_and_parity() {
+    let repo = Scratch::new("projects-api");
+    let server = start_server(&repo);
+    let addr = server.addr;
+
+    // Read: tokenless, shows the init project as default.
+    let (status, body) = get(&addr, "/api/projects");
+    assert!(status.contains("200"), "projects read: {status} {body}");
+    assert!(body.contains("\"default\":true"), "default marked: {body}");
+    assert!(body.contains("IAM"), "prefix present: {body}");
+
+    // Create via API: one commit, mapping lands.
+    let before = repo
+        .git(&["rev-list", "--count", "HEAD"])
+        .trim()
+        .parse::<usize>()
+        .expect("count");
+    let (status, body) = post(
+        &addr,
+        "/api/projects",
+        r#"{"name":"second","prefix":"VER","actor":"human:gui"}"#,
+        Some("gui-test-token"),
+    );
+    assert!(status.contains("201"), "create: {status} {body}");
+    let after = repo
+        .git(&["rev-list", "--count", "HEAD"])
+        .trim()
+        .parse::<usize>()
+        .expect("count");
+    assert_eq!(after, before + 1, "create = one commit");
+    let config = std::fs::read_to_string(repo.root.join(".tissue/config.yml")).unwrap();
+    assert!(config.contains("second: VER"), "mapping written: {config}");
+
+    // AC2: the CLI sees it immediately (shared core, no drift).
+    let out = repo.tissue(&["list", "--project", "second"]);
+    assert!(out.status.success(), "list --project second: {out:?}");
+    let (status, body) = get(&addr, "/api/projects");
+    assert!(
+        status.contains("200") && body.contains("\"name\":\"second\""),
+        "new project in read: {body}"
+    );
+
+    // Conflicts: duplicate prefix under a different name -> 409.
+    let (status, body) = post(
+        &addr,
+        "/api/projects",
+        r#"{"name":"other","prefix":"VER"}"#,
+        Some("gui-test-token"),
+    );
+    assert!(status.contains("409"), "duplicate prefix: {status} {body}");
+    assert!(body.contains("already mapped"), "conflict message: {body}");
+    // Same name, different prefix -> 409 (remap refusal).
+    let (status, body) = post(
+        &addr,
+        "/api/projects",
+        r#"{"name":"second","prefix":"OPS"}"#,
+        Some("gui-test-token"),
+    );
+    assert!(status.contains("409"), "remap refused: {status} {body}");
+    // Invalid input -> 400.
+    let (status, body) = post(
+        &addr,
+        "/api/projects",
+        r#"{"name":"bad","prefix":"ver"}"#,
+        Some("gui-test-token"),
+    );
+    assert!(status.contains("400"), "lowercase prefix: {status} {body}");
+    // Auth still required: no token -> 401.
+    let (status, _) = post(&addr, "/api/projects", r#"{"name":"x","prefix":"X"}"#, None);
+    assert!(status.contains("401"), "no token: {status}");
+
+    // AC3 parity: the CLI refuses the exact same conflicting input.
+    let out = repo.tissue(&["project", "add", "other", "VER"]);
+    assert!(!out.status.success(), "CLI parity: duplicate refused");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("already mapped"),
+        "CLI parity message: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 /// AC1 + AC2: a proposal created via CLI appears in the proposals read;
 /// approving via the API applies the edit and commits like the CLI.
 #[test]

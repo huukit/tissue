@@ -197,6 +197,9 @@ fn api_route(
         }
         return api_issue_detail(stream, repo, id);
     }
+    if rest == "projects" {
+        return api_projects(stream, repo);
+    }
     if rest == "releases" {
         return api_releases(stream, repo);
     }
@@ -204,6 +207,84 @@ fn api_route(
         return api_release_detail(stream, repo, id);
     }
     respond_json(stream, 404, "{\"error\":\"unknown api route\"}")
+}
+
+/// GET /api/projects — the configured project mapping (tokenless read,
+/// same as every GET). Shape: {"default": "...", "projects": [...]}.
+fn api_projects(stream: &mut TcpStream, repo: &Path) -> Result<(), String> {
+    let grepo = tissue_core::git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    let projects = tissue_core::projects::Projects::new(grepo);
+    let list = projects.list()?;
+    let default = projects.default_name()?;
+    let items: Vec<String> = list
+        .iter()
+        .map(|(name, prefix)| {
+            format!(
+                "{{\"name\":{},\"prefix\":{},\"default\":{}}}",
+                json_str(name),
+                json_str(prefix),
+                if *name == default { "true" } else { "false" }
+            )
+        })
+        .collect();
+    respond_json(
+        stream,
+        200,
+        &format!(
+            "{{\"default\":{},\"projects\":[{}]}}",
+            json_str(&default),
+            items.join(",")
+        ),
+    )
+}
+
+/// POST /api/projects {"name": "...", "prefix": "...", "actor"?} —
+/// create a project through the same core module as the CLI (#135):
+/// one validation, one commit path, no drift.
+fn api_write_create_project(
+    stream: &mut TcpStream,
+    repo: &Path,
+    payload: &str,
+) -> Result<(), String> {
+    let v = match parse_json_body(payload) {
+        Ok(v) => v,
+        Err(code) => return respond_json(
+            stream,
+            code,
+            "{\"error\":\"request body must be a JSON object: {\"name\",\"prefix\",(\"actor\")}\"}",
+        ),
+    };
+    let (Some(name), Some(prefix)) = (json_field(&v, "name"), json_field(&v, "prefix")) else {
+        return respond_json(
+            stream,
+            400,
+            "{\"error\":\"body must have string fields: name, prefix\"}",
+        );
+    };
+    let actor_id = json_field(&v, "actor").unwrap_or("human:gui");
+    let grepo = tissue_core::git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    let author = tissue_core::git::Author {
+        name: actor_id.to_string(),
+        email: format!("{actor_id}@tissue.local"),
+    };
+    match tissue_core::projects::Projects::new(grepo).add(name, prefix, &author) {
+        Ok(()) => respond_json(stream, 201, "{\"created\":true}"),
+        // Conflicts (duplicate prefix, name remap, invalid input) are 409s
+        // for existing state, 400s for bad input — both clean JSON.
+        Err(
+            e @ (tissue_core::projects::ProjectError::DuplicatePrefix { .. }
+            | tissue_core::projects::ProjectError::NameMapsToOtherPrefix { .. }),
+        ) => respond_json(
+            stream,
+            409,
+            &format!("{{\"error\":{}}}", json_str(&e.to_string())),
+        ),
+        Err(e) => respond_json(
+            stream,
+            400,
+            &format!("{{\"error\":{}}}", json_str(&e.to_string())),
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +387,9 @@ fn api_write_route(
     let rest = rest.trim_matches('/');
     if rest == "issues" {
         return api_write_create_issue(stream, repo, payload);
+    }
+    if rest == "projects" {
+        return api_write_create_project(stream, repo, payload);
     }
     if let Some(tail) = rest.strip_prefix("issues/") {
         let Some((id, verb)) = tail.split_once('/') else {

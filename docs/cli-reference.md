@@ -304,6 +304,14 @@ validation). Cutting an
 already-cut release fails. Commits: exactly one, `release cut <ID>`.
 | `--project <NAME>` | Filter the viewer to one project (name → id prefix from `.tissue/config.yml`); the issues list and detail routes show only that project's issues |
 
+### Projects API (#135)
+
+`serve` exposes the project mapping over HTTP — the same tissue-core
+module as `tissue project`, so CLI and API cannot drift:
+
+- `GET /api/projects` — tokenless read: `{"default": "e2e", "projects": [{"name": "e2e", "prefix": "IAM", "default": true}, ...]}`
+- `POST /api/projects` — token-protected write: `{"name": "ops", "prefix": "OPS", "actor"?: "human:gui"}` → `201 {"created": true}` and one `project add: <name> -> <prefix>` commit; conflicts (duplicate prefix, remapping an existing name) → 409; invalid input → 400.
+
 ### API token storage
 
 The write API's token is resolved in this order:
