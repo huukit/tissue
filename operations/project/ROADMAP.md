@@ -33,21 +33,36 @@ Trust before features held: the v0.1.4 gate landed all of it FF on main (`5f550a
 - `tissue project add/list/remove` (#119), serve no-token startup warning (#120)
 - Deploy hardening from the owner's box: literal `ExecStart` (203/EXEC, #129), file-based release fetch (curl exit 23, #130), post-swap `--version` guard (#128), manual-install docs for versioned names
 
-## Now — v0.1.5: make the core loop real and usable from the GUI
+## Done — v0.1.5 (2026-11-01, published 19:01Z) ✓
 
-Owner-verified on the deployment machine; next cut is about the sync button and visible state.
+main @ `862f3c8`, linear, CI green on head. The core loop is real and usable from the GUI:
 
-- **#139** four-case contract: agents never write the human format (creation included) — agent `POST /api/issues` becomes propose+needs-review; human actors create directly
-- **#136** sync records the real field-level human-format diff since the last baseline; "nothing to sync" when clean; #118 regression test
-- **#138** derived per-issue `last_touch` state (`human` / `synced` / `ai-proposal`) in CLI list, API, GUI badges
-- **#137** settings page + `agent:` block in config.yml; sync invokes the configured agent, outcome recorded in stream
-- **#134** GUI "New issue" button (human actor) · **#135** GUI "New project" button + `POST/GET /api/projects` sharing validation with CLI #119
-- Deploy: **#131** startup troubleshooting docs, **#132** units as dedicated `tissue` user, **#128** close-out
-- Gate: dev PRs → Tester verify → PO merge FF → tag v0.1.5 → owner smoke pass (auto-upgrade chain, full GUI write loop incl. sync diff, conflict path, rollback, loopback check) → then #3 discussion
+- **#139** four-case contract: agents never write the human format (creation included) — agent `POST /api/issues` is a creation proposal + needs-review; human actors create directly; sync-on-empty establishes the AI-side baseline
+- **#136** sync records the real field-level human-format diff since the last baseline; "nothing to sync" when clean; #118 regression covered
+- **#138** derived per-issue `last_touch` (`human` / `synced` / `ai-proposal`) in CLI list, API, GUI badges
+- **#137** settings page + `agent:` block in config.yml; sync invokes the configured agent (process-group timeout kill), outcome recorded in the stream
+- **#134** GUI "New issue" · **#135** GUI "New project" + `POST/GET /api/projects` (core module shared with CLI #119) · **#143** `GET /api/meta` + version/license/API-version footer · **#145** `tissue create --title` · **#154** CLI list/show mark pending create-proposals
+- Deploy: **#131/#132** units run as the dedicated `tissue` user (`/opt/tissue/bin`, scoped `ReadWritePaths`, EnvironmentFile token, ExecStartPre repo guard) + "first start fails?" troubleshooting docs; #128 close-out
+- Release pipeline now self-sufficient: publish directly (#126), versioned assets (#115), auto-upgrade verified end-to-end on the owner's box
+
+**main is frozen at v0.1.5 until the owner's #140 smoke pass is green (testing happens 2026-11-02).** Open PRs waiting behind the freeze: #160 (#159 token lifecycle), #161 (#147 docs).
+
+## Now — v0.1.6: trust & auth (gate for dogfooding)
+
+Owner ruling 2026-11-01: no dogfood switch before proper authentication.
+
+- **#159** token lifecycle: `tissue token issue/list/revoke`, hash-only storage in config.yml (no usable secret in git history), constant-time compare, per-actor human/agent tokens (PR #160, awaiting Tester)
+- **#147** v0.1.5 docs umbrella (PR #161) · **#148** release runbook · **#150** auto-delete merged branches + AGENTS.md lifecycle note · **#141** CI main-head run confirmation (fix already on main)
+- **#149** repo rules: owner-only PR approvals and `v*` tag pushes, read-only Actions default, 2FA — **owner action in Settings UI**, verify on the issue. Protects the root auto-upgrade path.
 
 ## Later — PoC dogfood switch (#3)
 
-Manage tissue's own issues in tissue. Explicitly gated by the owner: not before the v0.1.5 smoke pass is green on the deployment machine. Prerequisites (pull/push, import tooling, GUI review surface) are in place.
+Manage tissue's own issues in tissue. Gates: #140 green + #159 + #149. Prep may proceed on branches now (merge after the gates):
+
+- **#162** import hardening + full dry-run import of huukit/tissue into a scratch repo
+- **#163** DOGFOOD-RUNBOOK.md (cutover day procedure, rollback, two-week keep/kill criteria) + agent CLI workflow doc
+
+## Explicitly not now
 
 ## Explicitly not now
 
