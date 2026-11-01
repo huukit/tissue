@@ -32,13 +32,17 @@ This is the only document you need for one-time setup.
    chmod 0755 /usr/local/lib/tissue/tissue-upgrade.sh
    ```
 
-2. **Configure** the viewer for your box: edit the `Environment=` lines in
-   `/etc/systemd/system/tissue.service`:
+2. **Configure** the viewer for your box: edit the literal paths in the
+   `ExecStart=` line of `/etc/systemd/system/tissue.service` (systemd does
+   not expand `$VARIABLES` from `Environment=` inside `ExecStart=` — using
+   them there fails with 203/EXEC, #129):
 
-   - `TISSUE_REPO` — the directory containing your issue repo's `.tissue/`
+   - `--repo` — the directory containing your issue repo's `.tissue/`
      (e.g. `/srv/tissue-issues`; this is your *data*, not a code checkout)
-   - `TISSUE_BIN` — binary path (default `/usr/local/bin/tissue`)
-   - `TISSUE_PORT` — viewer port (default `7323`)
+   - `--port` — viewer port (default `7323`)
+   - the binary path is fixed at `/usr/local/bin/tissue` (managed by
+     tissue-upgrade; override only via its `TISSUE_BIN_DIR` if you also
+     change the ExecStart path to match)
 
 3. **Install the current binary** once so the service can start. Resolve the
    exact versioned asset name from the latest published release first (the

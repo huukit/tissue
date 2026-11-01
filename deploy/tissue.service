@@ -6,16 +6,17 @@ After=network.target
 [Service]
 Type=simple
 # One-time setup: copy this file to /etc/systemd/system/ and edit the
-# Environment lines for your box, then `systemctl daemon-reload`.
+# paths in the ExecStart line for your box, then `systemctl daemon-reload`.
+# NOTE: systemd does NOT expand $VARIABLES from Environment= inside
+# ExecStart= (it would be passed literally and fail with 203/EXEC, #129) —
+# keep the literal paths below.
 #
-# TISSUE_REPO  path to the tissue issue repository (the directory containing
-#              .tissue/) — NOT the code checkout.
-# TISSUE_BIN   path to the tissue binary (managed by tissue-upgrade).
-# TISSUE_PORT  port for the loopback viewer (default 7323).
-Environment=TISSUE_REPO=/srv/tissue-issues
-Environment=TISSUE_BIN=/usr/local/bin/tissue
-Environment=TISSUE_PORT=7323
-ExecStart=${TISSUE_BIN} serve --repo ${TISSUE_REPO} --port ${TISSUE_PORT}
+# --repo  path to the tissue issue repository (the directory containing
+#         .tissue/) — NOT the code checkout.
+# --port  port for the loopback viewer (default 7323).
+# The binary path is fixed: /usr/local/bin/tissue (managed by
+# tissue-upgrade, TISSUE_BIN_DIR default).
+ExecStart=/usr/local/bin/tissue serve --repo /srv/tissue-issues --port 7323
 Restart=on-failure
 RestartSec=5
 

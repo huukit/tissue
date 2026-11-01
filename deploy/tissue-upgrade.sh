@@ -112,6 +112,13 @@ if [ -x "$BIN_PATH" ]; then
     cp -f "$BIN_PATH" "$ROLLBACK_PATH"
 fi
 install -m 0755 "$new_bin" "${BIN_PATH}.new"
+# Post-swap sanity check (#128): never activate a binary that cannot run —
+# if it fails, roll back immediately and keep the old version serving.
+if ! "${BIN_PATH}.new" --version >/dev/null 2>&1; then
+    log "new binary failed --version sanity check -- rolling back, keeping old version"
+    rm -f "${BIN_PATH}.new"
+    exit 1
+fi
 mv -f "${BIN_PATH}.new" "$BIN_PATH"
 # Stamp the verified archive hash so the next run's currency check is a
 # cheap sidecar-vs-stamp comparison (#88).
