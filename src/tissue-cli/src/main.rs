@@ -188,6 +188,12 @@ enum Commands {
         #[command(subcommand)]
         command: ProjectCommands,
     },
+    /// API token subcommands: issue / list / revoke (#159). Secrets are
+    /// stored as SHA-256 hashes only — the plaintext is printed once.
+    Token {
+        #[command(subcommand)]
+        command: TokenCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -210,6 +216,25 @@ enum ProjectCommands {
         /// Remove even if issues with the project's prefix exist.
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum TokenCommands {
+    /// Issue a new API token. Prints the secret ONCE — store it somewhere
+    /// safe; only its SHA-256 hash is written to config.yml (one commit).
+    Issue {
+        /// Label for the token, e.g. `human:tuomas` or `agent:dev-1`.
+        #[arg(long, value_name = "LABEL")]
+        label: String,
+    },
+    /// List tokens: id, label, created — never the secret. A legacy
+    /// plaintext `api_token:` line is reported as a migration item.
+    List,
+    /// Revoke a token by id; it fails closed immediately (one commit).
+    Revoke {
+        /// Token id printed by `tissue token list` (e.g. `tok-01`).
+        id: String,
     },
 }
 
@@ -397,6 +422,7 @@ fn run(cli: Cli) -> Result<(), String> {
         Commands::Push { force_with_lease } => push_cmd(&repo, force_with_lease),
         Commands::Release { command } => release_cmd(&repo, command),
         Commands::Project { command } => project_cmd(&repo, command),
+        Commands::Token { command } => token_cmd(&repo, command),
     }
 }
 
@@ -453,6 +479,57 @@ fn project_cmd(repo: &Path, command: ProjectCommands) -> Result<(), String> {
                 .map(|(_, p)| p.clone())
                 .unwrap_or_default();
             println!("removed project {name} (prefix {prefix})");
+            Ok(())
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tokens (#159): issue/list/revoke, hash-only storage in config.yml
+// ---------------------------------------------------------------------------
+
+fn token_cmd(repo: &Path, command: TokenCommands) -> Result<(), String> {
+    require_repo(repo)?;
+    let grepo = git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    let store = tissue_core::tokens::TokenStore::new(grepo);
+    match command {
+        TokenCommands::Issue { label } => {
+            let (secret, id) = store
+                .issue(&label, &tissue_author(), &now_utc())
+                .map_err(|e| e.to_string())?;
+            println!("issued {id} ({label})");
+            println!("token: {secret}");
+            println!("stored as sha256 only in .tissue/config.yml — this is the only time the secret is shown");
+            Ok(())
+        }
+        TokenCommands::List => {
+            let entries = store.list()?;
+            if store.has_legacy_plaintext_token() {
+                println!("note: legacy plaintext `api_token:` line in config.yml — migrate with `tissue token issue` + remove the line (a plaintext token lands in git history)");
+            }
+            if entries.is_empty() {
+                println!("no managed tokens");
+            }
+            for t in &entries {
+                println!("{}\t{}\tcreated {}", t.id, t.label, t.created);
+            }
+            if std::env::var("TISSUE_API_TOKEN")
+                .ok()
+                .filter(|t| !t.trim().is_empty())
+                .is_some()
+            {
+                println!("(env override TISSUE_API_TOKEN is set and takes precedence for writes)");
+            }
+            Ok(())
+        }
+        TokenCommands::Revoke { id } => {
+            let removed = store
+                .revoke(&id, &tissue_author())
+                .map_err(|e| e.to_string())?;
+            println!(
+                "revoked {} ({}) — it now fails closed",
+                removed.id, removed.label
+            );
             Ok(())
         }
     }

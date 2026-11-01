@@ -296,6 +296,24 @@ tissue serve --project iam   # filtered viewer
 
 ---
 
+## `tissue token <SUBCOMMAND>` (#159)
+
+Manage the write-API bearer tokens. Secrets are stored as SHA-256 hashes
+only in `.tissue/config.yml` (`tokens:` block) — never plaintext.
+
+```sh
+tissue token issue --label human:tuomas   # prints the secret once; one commit
+tissue token list                          # id, label, created; never the secret
+tissue token revoke tok-01                 # revoked tokens fail closed (401)
+```
+
+The `TISSUE_API_TOKEN` env var remains as a bootstrap/override and takes
+precedence; a legacy plaintext `api_token:` config line still works but is
+reported by `token list` as a migration item. See
+[API tokens](#api-tokens-159) below for the full resolution order.
+
+---
+
 ## `tissue release <SUBCOMMAND>`
 
 Release tracking over `.tissue/releases/<ver>/` (STATE.md decision 6):
@@ -377,17 +395,32 @@ module as `tissue project`, so CLI and API cannot drift:
 - `GET /api/projects` — tokenless read: `{"default": "e2e", "projects": [{"name": "e2e", "prefix": "IAM", "default": true}, ...]}`
 - `POST /api/projects` — token-protected write: `{"name": "ops", "prefix": "OPS", "actor"?: "human:gui"}` → `201 {"created": true}` and one `project add: <name> -> <prefix>` commit; conflicts (duplicate prefix, remapping an existing name) → 409; invalid input → 400.
 
-### API token storage
+### API tokens (#159)
 
-The write API's token is resolved in this order:
+The write API authenticates with bearer tokens. Managed tokens are issued,
+listed, and revoked with `tissue token`:
 
-1. **`TISSUE_API_TOKEN` environment variable** (recommended): untracked
-   by git, deployment-friendly — e.g. the systemd unit's `Environment=`
-   line sets it on the testing machine.
-2. **`api_token:` in `.tissue/config.yml`** (fallback): the config file
-   is git-tracked, so a real token there lands permanently in the issue
-   repo's history. Use this only for local, throwaway, or public-test
-   repos, or with a token you are willing to rotate.
+```sh
+tissue token issue --label human:tuomas    # prints the secret ONCE
+tissue token list                           # id, label, created — never the secret
+tissue token revoke tok-01                  # fails closed immediately
+```
 
-Absent/empty in both places means the write API is disabled (explicit
-503 on every write attempt).
+Managed tokens are stored in `.tissue/config.yml` under `tokens:` as
+**SHA-256 hashes only** — the plaintext secret is never written to the
+git-tracked config, so no usable secret lands in history. Each issue/revoke
+is one git commit. The comparison is constant-time (xor-fold over
+equal-length inputs).
+
+The token is resolved in this order on each write:
+
+1. **`TISSUE_API_TOKEN` environment variable** (bootstrap/override):
+   untracked by git, deployment-friendly — e.g. the systemd unit's
+   `Environment=`/`EnvironmentFile=`.
+2. **Managed `tokens:` entries** (hash-only) via `tissue token issue`.
+3. **Legacy `api_token:` line in `.tissue/config.yml`** (pre-#159 repos):
+   still works, but a plaintext token there lands permanently in history —
+   `tissue token list` reports it as a migration item. Prefer (1) or (2).
+
+Absent/empty everywhere means the write API is disabled (explicit 503 on
+every write attempt); a revoked or wrong token gets 401.

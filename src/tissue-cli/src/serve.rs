@@ -51,9 +51,9 @@ pub fn serve(
     let listener = TcpListener::bind(addr).map_err(|e| format!("binding {addr}: {e}"))?;
     // #120: with no token resolvable, GUI write actions and agent POSTs
     // 401 with no startup hint. Reads are unaffected either way.
-    if api_token(&repo).is_none() {
+    if !write_auth_configured(&repo) {
         eprintln!(
-            "note: no API token configured (TISSUE_API_TOKEN / api_token:) — the GUI and agent write API are read-only until one is set"
+            "note: no API token configured (tissue token issue, or TISSUE_API_TOKEN env) — the GUI and agent write API are read-only until one is set"
         );
     }
     println!(
@@ -423,45 +423,56 @@ fn api_write_create_project(
 // commit-per-mutation audit trail and stream invariants hold.
 // ---------------------------------------------------------------------------
 
-/// The repo's API token, read from `.tissue/config.yml` (`api_token:`).
-/// Absent/empty means the write API is disabled.
-fn api_token(repo: &Path) -> Option<String> {
-    // TISSUE_API_TOKEN env var first: untracked, deployment-friendly
-    // (e.g. the systemd unit's Environment= line).
-    if let Ok(env_token) = std::env::var("TISSUE_API_TOKEN") {
-        let t = env_token.trim();
-        if !t.is_empty() {
-            return Some(t.to_string());
-        }
-    }
-    // Fallback: api_token: in .tissue/config.yml (git-tracked — a real
-    // token there lands in history; documented trade-off, see
-    // docs/cli-reference.md).
-    let config = std::fs::read_to_string(tissue_dir(repo).join("config.yml")).ok()?;
-    let line = config
-        .lines()
-        .find(|l| l.trim_start().starts_with("api_token:"))?;
-    let token = line
-        .trim_start()
-        .strip_prefix("api_token:")?
-        .trim()
-        .trim_matches('"');
-    let token = token.trim();
-    if token.is_empty() {
-        None
-    } else {
-        Some(token.to_string())
-    }
+/// The repo's API token inputs for write auth (#159): the
+/// TISSUE_API_TOKEN env override first (untracked, deployment-friendly),
+/// then the managed hash-only `tokens:` entries plus a legacy plaintext
+/// `api_token:` line in config.yml (kept working; `tissue token list`
+/// reports it as a migration item). Absent/empty everywhere means the
+/// write API is disabled.
+fn env_token_override() -> Option<String> {
+    std::env::var("TISSUE_API_TOKEN")
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
 }
 
-/// Constant-time-ish comparison: equal-length check first, then xor-fold.
-fn token_matches(expected: &str, provided: &str) -> bool {
-    let a = expected.as_bytes();
-    let b = provided.as_bytes();
-    if a.len() != b.len() {
-        return false;
+fn token_store(repo: &Path) -> Option<tissue_core::tokens::TokenStore> {
+    tissue_core::git::Repo::open(repo)
+        .ok()
+        .map(tissue_core::tokens::TokenStore::new)
+}
+
+/// Resolve a presented bearer token to a label, or None when it matches no
+/// valid token (env override, managed hash entry, or legacy plaintext line).
+/// All comparisons are constant-time (tissue-core::tokens).
+fn resolve_token(repo: &Path, presented: &str) -> Option<String> {
+    let env = env_token_override();
+    if let Some(store) = token_store(repo) {
+        if let Some(entry) = store.resolve(presented, env.as_deref()) {
+            return Some(entry.label);
+        }
     }
-    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    // Legacy plaintext line (pre-#159 repos).
+    if let Some(legacy) = tissue_core::tokens::legacy_plaintext_token(repo) {
+        if tissue_core::tokens::constant_time_eq(&legacy, presented) {
+            return Some("api_token (legacy config line)".to_string());
+        }
+    }
+    None
+}
+
+/// True when any write auth is configured at all (env override, a managed
+/// token, or a legacy line) — used for the startup note (#120).
+fn write_auth_configured(repo: &Path) -> bool {
+    if env_token_override().is_some() {
+        return true;
+    }
+    if let Some(store) = token_store(repo) {
+        if !store.list().unwrap_or_default().is_empty() {
+            return true;
+        }
+    }
+    tissue_core::tokens::legacy_plaintext_token(repo).is_some()
 }
 
 fn bearer_token(headers: &str) -> Option<String> {
@@ -483,18 +494,21 @@ fn api_write_route(
     headers: &str,
     body: &[u8],
 ) -> Result<(), String> {
-    // Auth failures are explicit and never log the token (AC4).
-    let Some(token) = api_token(repo) else {
+    // Auth failures are explicit and never log the token (AC4). #159: the
+    // presented token resolves against the env override, the managed
+    // hash-only `tokens:` entries, or a legacy plaintext line — all with
+    // constant-time compares.
+    if !write_auth_configured(repo) {
         return respond_json(
             stream,
             503,
-            "{\"error\":\"write API disabled: no api_token in .tissue/config.yml\"}",
+            "{\"error\":\"write API disabled: no token configured (tissue token issue, or TISSUE_API_TOKEN env)\"}",
         );
-    };
+    }
     match bearer_token(headers) {
-        Some(provided) if token_matches(&token, &provided) => {}
+        Some(provided) if resolve_token(repo, &provided).is_some() => {}
         Some(_) => {
-            return respond_json(stream, 401, "{\"error\":\"invalid or expired token\"}");
+            return respond_json(stream, 401, "{\"error\":\"invalid or revoked token\"}");
         }
         None => {
             return respond_json(

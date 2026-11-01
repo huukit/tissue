@@ -640,3 +640,140 @@ fn gui_edit_endpoint_and_conflict_handling() {
         "enum hint: {body}"
     );
 }
+
+/// #159 AC1/AC2: managed hash-only tokens — `tissue token issue` stores
+/// only the SHA-256 in config.yml (never the plaintext), the issued token
+/// authorizes writes, `revoke` makes it fail closed (401), and
+/// `token list` shows id/label/created without the secret.
+#[test]
+fn managed_tokens_issue_use_revoke() {
+    let repo = Scratch::new("managed-tokens");
+    // No legacy api_token line, no env token.
+    let server = start_server(&repo);
+    let addr = &server.addr;
+
+    // Write API disabled with no token configured at all.
+    let (status, _h, body) = post(
+        addr,
+        "/api/projects",
+        "{\"name\":\"x\",\"prefix\":\"X\"}",
+        Some("anything"),
+    );
+    assert!(status.contains("503"), "{status} {body}");
+
+    // Issue a token via the CLI; the secret appears in stdout exactly once.
+    let out = repo.tissue(&["token", "issue", "--label", "human:gui"]);
+    assert!(out.status.success(), "token issue failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let secret = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("token: "))
+        .expect("secret printed once")
+        .trim()
+        .to_string();
+    assert_eq!(secret.len(), 43);
+
+    // config.yml holds only the hash, never the plaintext secret.
+    let config = std::fs::read_to_string(repo.root.join(".tissue/config.yml")).unwrap();
+    assert!(
+        !config.contains(&secret),
+        "plaintext leaked into config.yml: {config}"
+    );
+    assert!(config.contains("sha256:"));
+    assert!(config.contains("human:gui"));
+
+    // The issued token now authorizes a write (201), and one commit landed.
+    let before = repo.commit_count();
+    let (status, _h, body) = post(
+        addr,
+        "/api/projects",
+        "{\"name\":\"ops\",\"prefix\":\"OPS\"}",
+        Some(&secret),
+    );
+    assert!(status.contains("201"), "{status} {body}");
+    assert_eq!(repo.commit_count(), before + 1);
+
+    // token list shows the entry, never the secret.
+    let out = repo.tissue(&["token", "list"]);
+    assert!(out.status.success());
+    let list = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        list.contains("tok-01") && list.contains("human:gui"),
+        "{list}"
+    );
+    assert!(!list.contains(&secret), "list leaks secret: {list}");
+
+    // Revoke: the old token now 401s (fails closed).
+    let out = repo.tissue(&["token", "revoke", "tok-01"]);
+    assert!(out.status.success(), "revoke failed: {out:?}");
+    // With the only token revoked and no env override, writes are disabled
+    // (503) — and even if another token existed, the revoked one must 401.
+    let (status, _h, body) = post(
+        addr,
+        "/api/projects",
+        "{\"name\":\"y\",\"prefix\":\"Y\"}",
+        Some(&secret),
+    );
+    assert!(
+        status.contains("401") || status.contains("503"),
+        "revoked token must fail closed: {status} {body}"
+    );
+    // Issue a second token: the revoked secret still must not work.
+    let out = repo.tissue(&["token", "issue", "--label", "agent:dev-1"]);
+    assert!(out.status.success());
+    let (status, _h, body) = post(
+        addr,
+        "/api/projects",
+        "{\"name\":\"y\",\"prefix\":\"Y\"}",
+        Some(&secret),
+    );
+    assert!(
+        status.contains("401"),
+        "revoked token must 401 while another is valid: {status} {body}"
+    );
+    // And the store no longer contains the revoked hash (the second token's
+    // own hash is present; compare against the revoked one's digest).
+    let config = std::fs::read_to_string(repo.root.join(".tissue/config.yml")).unwrap();
+    let revoked_hash = sha256_of(&secret);
+    assert!(
+        !config.contains(&revoked_hash),
+        "revoked hash still in config.yml: {config}"
+    );
+}
+
+/// SHA-256 hex of a string, via the system tool (tests may shell out).
+fn sha256_of(s: &str) -> String {
+    let out = std::process::Command::new("sha256sum")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut c| {
+            use std::io::Write;
+            c.stdin.take().unwrap().write_all(s.as_bytes())?;
+            c.wait_with_output()
+        })
+        .expect("sha256sum");
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// #159 AC2: the TISSUE_API_TOKEN env override still works for bootstrap
+/// and takes precedence over managed tokens.
+#[test]
+fn env_token_override_still_works() {
+    let repo = Scratch::new("env-token");
+    let server = start_server_with_env(&repo, &[("TISSUE_API_TOKEN", "env-secret-123")]);
+    let addr = &server.addr;
+    let (status, _h, _b) = post(
+        addr,
+        "/api/projects",
+        "{\"name\":\"ops\",\"prefix\":\"OPS\"}",
+        Some("env-secret-123"),
+    );
+    assert!(status.contains("201"), "{status}");
+    let (status, _h, _b) = post(addr, "/api/projects", "{}", Some("wrong"));
+    assert!(status.contains("401"), "{status}");
+}

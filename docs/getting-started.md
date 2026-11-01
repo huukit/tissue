@@ -93,14 +93,23 @@ project filters and search), work the needs-review queue (approve/reject
 in the browser), read the agent-stream timeline, and edit front matter
 with conflict-safe semantics.
 
-Write actions in the GUI need the repo's API token:
+Write actions in the GUI need the repo's API token. Issue a managed token
+(#159) — only its SHA-256 hash is stored in the git-tracked config, so no
+usable secret lands in history:
 
-1. Set one in `.tissue/config.yml` — a line `api_token: "your-token"` —
-   or export `TISSUE_API_TOKEN` in the environment before `tissue serve`
-   (the env var wins; nothing lands in tracked files).
-2. In the GUI, paste the token into the token bar once per browser
-   session; it is kept in the browser's sessionStorage only — never
-   written to disk, never logged.
+```sh
+tissue token issue --label human:you    # prints the secret once — save it
+```
+
+Alternatively export `TISSUE_API_TOKEN` in the environment before
+`tissue serve` (the env var wins; nothing lands in tracked files; ideal for
+the systemd unit via an `EnvironmentFile=`). A legacy `api_token:` line in
+`.tissue/config.yml` still works but is discouraged — `tissue token list`
+flags it for migration. Revoke with `tissue token revoke <id>`.
+
+In the GUI, paste the token into the token bar once per browser
+session; it is kept in the browser's sessionStorage only — never
+written to disk, never logged.
 
 Agents use the same token for the REST write API
 (`Authorization: Bearer <token>`). See the

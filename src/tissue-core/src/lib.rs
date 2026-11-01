@@ -11,6 +11,7 @@ pub mod projects;
 pub mod releases;
 pub mod state;
 pub mod sync;
+pub mod tokens;
 
 /// Crate version, for diagnostics.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
