@@ -68,7 +68,10 @@ Commits: exactly one, `create <ID>: <TITLE>`.
 
 ## `tissue list`
 
-List issues; issues awaiting review are flagged `NEEDS REVIEW`.
+List issues; issues awaiting review are flagged `NEEDS REVIEW`. A pending
+agent create-proposal (directory with a stream but no `issue.md` yet,
+#139) is listed as `<ID>  (pending proposal)  <draft title>  [ai-proposal] [NEEDS REVIEW]`
+— no warning; after approval it becomes a normal row (#154).
 
 ```sh
 tissue list

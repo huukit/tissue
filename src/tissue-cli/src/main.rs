@@ -764,9 +764,40 @@ fn list(
         else {
             continue;
         };
-        let Ok(issue) = IssueFile::from_path(&dir_path.join("issue.md")) else {
-            eprintln!("warning: skipping unreadable issue directory {name}");
-            continue;
+        // #154: a pending create-proposal has a directory + stream but no
+        // issue.md yet — list it marked (like the API/GUI do) instead of
+        // warning "skipping unreadable issue directory".
+        let issue = match IssueFile::from_path(&dir_path.join("issue.md")) {
+            Ok(issue) => issue,
+            Err(_) => {
+                let draft = core_for(repo)
+                    .and_then(|core| core.creation_draft(&name).map_err(|e| e.to_string()))
+                    .ok()
+                    .flatten();
+                match draft {
+                    Some((_pid, title, _body)) => {
+                        if let Some(p) = &prefix {
+                            if !name.starts_with(&format!("{p}-")) {
+                                continue;
+                            }
+                        }
+                        if !status_filter.is_empty()
+                            && !status_filter.iter().any(|s| s.eq_ignore_ascii_case("open"))
+                        {
+                            continue;
+                        }
+                        any = true;
+                        println!(
+                            "{name}  (pending proposal)  {title}  [ai-proposal] [NEEDS REVIEW]"
+                        );
+                        continue;
+                    }
+                    None => {
+                        eprintln!("warning: skipping unreadable issue directory {name}");
+                        continue;
+                    }
+                }
+            }
         };
         if let Some(p) = &prefix {
             if !name.starts_with(&format!("{p}-")) {
@@ -820,8 +851,27 @@ fn show(repo: &Path, id: &str) -> Result<(), String> {
     require_repo(repo)?;
     check_issue_id(id)?;
     let path = issue_dir(repo, id).join("issue.md");
-    let issue =
-        IssueFile::from_path(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let issue = match IssueFile::from_path(&path) {
+        Ok(issue) => issue,
+        Err(_) => {
+            // #154: a pending create-proposal has no issue.md yet — say so
+            // clearly instead of a bare read error.
+            let draft = core_for(repo)
+                .and_then(|core| core.creation_draft(id).map_err(|e| e.to_string()))
+                .ok()
+                .flatten();
+            if let Some((pid, title, body)) = draft {
+                println!("id:      {id}");
+                println!("title:   {title} (pending proposal {pid})");
+                println!("status:  (pending approval — no issue.md yet)");
+                println!("review:  NEEDS REVIEW — approve the proposal to create issue.md");
+                println!();
+                println!("{}", body.trim_end());
+                return Ok(());
+            }
+            return Err(format!("reading {}: {e}", path.display(), e = "not found"));
+        }
+    };
     println!("id:      {}", issue.id);
     println!("title:   {}", issue.title);
     println!("status:  {}", issue.status.as_str());

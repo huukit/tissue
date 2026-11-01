@@ -539,3 +539,64 @@ fn multi_project_filters_and_full_loop() {
         assert!(issue.contains("in-progress"), "applied to {id}");
     }
 }
+
+/// #154 AC1: with a pending agent create-proposal (directory + stream, no
+/// issue.md), `tissue list` shows the draft marked — no "skipping
+/// unreadable" warning — and `tissue show` prints the draft with a clear
+/// pending-approval note. After approval, the normal row returns.
+#[test]
+fn list_and_show_handle_proposal_only_issue_dirs() {
+    let repo = Repo::new("proposal-list");
+    init(&repo);
+    create(&repo, "IAM-1", "Normal issue");
+
+    // Simulate the agent create-proposal path (#139): a proposal record
+    // with field=create, no issue.md.
+    let dir = repo.root.join(".tissue/issues/IAM-2");
+    std::fs::create_dir_all(&dir).unwrap();
+    let stream = r#"{"seq":1,"id":"rec-0001","type":"proposal","ts":"2026-11-01T13:00:00Z","actor":"agent:dev-1","data":{"proposal_id":"prop-01","target":"issue.md","field":"create","current":"","proposed":"Agent-created draft","rationale":"agent-created issue awaiting review","state":"proposed","draft":{"title":"Agent-created draft","body":"draft body"}}}
+"#;
+    std::fs::write(dir.join("agent.jsonl"), stream).unwrap();
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-m", "propose create IAM-2"]);
+
+    // list: IAM-2 appears marked, no stderr warning.
+    let out = repo.tissue(&["list"]);
+    Repo::assert_success(&out, "list with pending proposal");
+    let list = Repo::stdout(&out);
+    let err = Repo::stderr(&out);
+    assert!(
+        !err.contains("skipping unreadable"),
+        "no warning for proposal-only dir: {err}"
+    );
+    assert!(list.contains("IAM-2"), "draft listed: {list}");
+    assert!(
+        list.contains("pending proposal"),
+        "marked as pending: {list}"
+    );
+    assert!(
+        list.contains("Agent-created draft"),
+        "draft title shown: {list}"
+    );
+    assert!(list.contains("IAM-1"), "normal issue still listed: {list}");
+
+    // show: clear pending-approval message, not a read error.
+    let out = repo.tissue(&["show", "IAM-2"]);
+    Repo::assert_success(&out, "show pending proposal");
+    let shown = Repo::stdout(&out);
+    assert!(shown.contains("pending approval"), "{shown}");
+    assert!(shown.contains("Agent-created draft"), "{shown}");
+
+    // Approve: issue.md materializes; list returns to the normal row.
+    let out = repo.tissue(&["approve", "IAM-2", "prop-01"]);
+    Repo::assert_success(&out, "approve create");
+    assert!(repo.read_issue("IAM-2").contains("Agent-created draft"));
+    let out = repo.tissue(&["list"]);
+    Repo::assert_success(&out, "list after approval");
+    let list = Repo::stdout(&out);
+    assert!(list.contains("IAM-2"), "{list}");
+    assert!(
+        !list.contains("pending proposal"),
+        "marker gone after approval: {list}"
+    );
+}
