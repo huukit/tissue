@@ -381,7 +381,8 @@ impl Core {
                 "ts": now,
                 "actor": actor.id,
                 "refs": [],
-                "data": { "trigger": "command", "summary_of_human_change": summary }
+                "data": { "trigger": "command", "summary_of_human_change": summary,
+                          "reconciliation": "from sync record onward" }
             }),
         )?;
         Ok(self

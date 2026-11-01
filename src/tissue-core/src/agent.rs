@@ -159,6 +159,7 @@ pub enum RecordData {
     HumanSync {
         trigger: String,
         summary_of_human_change: String,
+        #[serde(default)]
         reconciliation: String,
     },
     Proposal {
@@ -656,6 +657,38 @@ mod tests {
         match legacy.data {
             RecordData::Plan { goal, .. } => assert_eq!(goal, "g"),
             other => panic!("expected plan, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn human_sync_without_reconciliation_still_parses() {
+        // #118: records written by the pre-#118 core's `sync()` lack the
+        // `reconciliation` field. Strict `AgentStream::open` must keep
+        // accepting them or every previously-synced issue breaks on the
+        // next API append.
+        let dir = std::env::temp_dir().join(format!(
+            "tissue-core-agent-legacy-sync-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"id\":\"rec-0001\",\"type\":\"human-sync\",\"ts\":\"2026-10-08T11:00:00Z\",",
+                "\"actor\":\"human:tuomas\",\"seq\":1,\"refs\":[],",
+                "\"data\":{\"trigger\":\"command\",\"summary_of_human_change\":\"edited\"}}\n"
+            ),
+        )
+        .unwrap();
+        let s = AgentStream::open(&path).unwrap();
+        match &s.records()[0].data {
+            RecordData::HumanSync { reconciliation, .. } => assert_eq!(reconciliation, ""),
+            other => panic!("expected human-sync, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

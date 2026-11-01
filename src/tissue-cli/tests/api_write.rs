@@ -440,6 +440,43 @@ fn gui_sync_endpoint_matches_cli_commit() {
     assert!(status.contains("401"), "wrong token: {status}");
 }
 
+/// #118 regression: a CLI-synced issue must stay writable via the API.
+/// `tissue sync` used to write the human-sync record without the
+/// `reconciliation` field; strict `AgentStream::open` then rejected
+/// every later append with 400 — permanently, for that issue.
+#[test]
+fn append_via_api_after_cli_sync() {
+    let repo = Scratch::new("sync-then-append");
+    repo.set_token("test-token-1");
+    repo.tissue(&["create", "IAM-1", "Synced first", "--body", "b"]);
+    let out = repo.tissue(&["sync", "IAM-1", "--summary", "human edited"]);
+    assert!(out.status.success(), "cli sync failed: {out:?}");
+    let server = start_server(&repo);
+    let addr = server.addr;
+    let before = repo.commit_count();
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues/IAM-1/records",
+        r#"{"actor":"agent:dev-1","data":{"type":"observation","summary":"after a sync"}}"#,
+        Some("test-token-1"),
+    );
+    assert!(
+        status.contains("201"),
+        "append after cli sync: {status} body: {body}"
+    );
+    assert!(
+        body.contains("\"seq\":2"),
+        "seq continues past the sync record: {body}"
+    );
+    assert_eq!(repo.commit_count(), before + 1, "append = one commit");
+    let stream =
+        std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-1/agent.jsonl")).unwrap();
+    assert!(
+        stream.contains("\"reconciliation\""),
+        "sync record now carries the schema-required field: {stream}"
+    );
+}
+
 #[test]
 fn gui_edit_endpoint_and_conflict_handling() {
     let repo = Scratch::new("gui-edit");
