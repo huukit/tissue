@@ -5,6 +5,10 @@ After=network.target
 
 [Service]
 Type=simple
+# Runs as the dedicated unprivileged `tissue` user (#132) — see
+# deploy/README.md for the fresh-box setup (useradd + ownership).
+User=tissue
+Group=tissue
 # One-time setup: copy this file to /etc/systemd/system/ and edit the
 # paths in the ExecStart line for your box, then `systemctl daemon-reload`.
 # NOTE: systemd does NOT expand $VARIABLES from Environment= inside
@@ -14,17 +18,27 @@ Type=simple
 # --repo  path to the tissue issue repository (the directory containing
 #         .tissue/) — NOT the code checkout.
 # --port  port for the loopback viewer (default 7323).
-# The binary path is fixed: /usr/local/bin/tissue (managed by
-# tissue-upgrade, TISSUE_BIN_DIR default).
-ExecStart=/usr/local/bin/tissue serve --repo /srv/tissue-issues --port 7323
+# The binary path is fixed: /opt/tissue/bin/tissue (managed by
+# tissue-upgrade, TISSUE_BIN_DIR; /usr/local/bin stays root-owned).
+ExecStart=/opt/tissue/bin/tissue serve --repo /srv/tissue-issues --port 7323
+# Fail at unit level with a clear message when the repo dir is missing,
+# instead of a bare exit 1 from serve (#131).
+ExecStartPre=/usr/bin/test -d /srv/tissue-issues/.tissue
 Restart=on-failure
 RestartSec=5
 
+# The API token for write actions (GUI/agent). Set a real value here or use
+# an EnvironmentFile=; never commit a real token. With none set, serve
+# starts read-only and prints a startup note (#120).
+# Environment=TISSUE_API_TOKEN=change-me
+
 # Hardening: the viewer is read-only and loopback-only; keep it that way.
+# serve only needs to write inside the issue repo.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+ReadWritePaths=/srv/tissue-issues
 
 [Install]
 WantedBy=multi-user.target

@@ -6,11 +6,13 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-# The upgrade script runs as a dedicated user that can write the binary
-# location and control tissue.service. If you prefer, run it as root and
-# drop the User/Group lines.
+# Runs as the dedicated unprivileged `tissue` user (#132), which owns the
+# binary dir (/opt/tissue/bin) and may control tissue.service via a polkit
+# rule or sudoers entry — see deploy/README.md fresh-box setup.
+User=tissue
+Group=tissue
 Environment=TISSUE_REPO_SLUG=huukit/tissue
-Environment=TISSUE_BIN_DIR=/usr/local/bin
+Environment=TISSUE_BIN_DIR=/opt/tissue/bin
 ExecStart=/usr/local/lib/tissue/tissue-upgrade.sh
 
 [Install]
