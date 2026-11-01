@@ -181,6 +181,10 @@ pub enum RecordData {
         proposed: String,
         rationale: String,
         state: ProposalState,
+        /// #139: a creation proposal's draft (title+body). Absent on
+        /// ordinary field-edit proposals.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        draft: Option<serde_json::Value>,
     },
     Approval {
         proposal_id: String,
@@ -892,6 +896,7 @@ mod tests {
                 proposed: "closed".into(),
                 rationale: "work landed".into(),
                 state: ProposalState::Proposed,
+                draft: None,
             },
             "agent:dev-1",
             "2026-10-08T14:20:00Z",
@@ -925,6 +930,7 @@ mod tests {
                 proposed: "b".into(),
                 rationale: String::new(),
                 state: ProposalState::Proposed,
+                draft: None,
             },
             "agent:dev-1",
             "2026-10-08T14:20:00Z",
@@ -986,6 +992,7 @@ mod tests {
                     proposed: "b".into(),
                     rationale: String::new(),
                     state: ProposalState::Approved,
+                    draft: None,
                 },
                 "agent:dev-1",
                 "2026-10-08T14:20:00Z",

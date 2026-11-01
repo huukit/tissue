@@ -95,6 +95,9 @@ pub enum Field {
     Title,
     Status,
     Release,
+    /// #139: an agent's issue-creation proposal — the draft lives in the
+    /// stream, the human format is only written on approval.
+    Create,
 }
 
 impl Field {
@@ -103,6 +106,7 @@ impl Field {
             Field::Title => "title",
             Field::Status => "status",
             Field::Release => "release",
+            Field::Create => "create",
         }
     }
 
@@ -111,6 +115,7 @@ impl Field {
             "title" => Some(Field::Title),
             "status" => Some(Field::Status),
             "release" => Some(Field::Release),
+            "create" => Some(Field::Create),
             _ => None,
         }
     }
@@ -328,6 +333,8 @@ impl Core {
             Field::Title => issue.title.clone(),
             Field::Status => issue.status.as_str().to_string(),
             Field::Release => issue.release.clone().unwrap_or_default(),
+            // Creation proposals never compare against an existing file.
+            Field::Create => String::new(),
         }
     }
 
@@ -339,6 +346,11 @@ impl Core {
         now: &str,
     ) -> Result<()> {
         match field {
+            Field::Create => {
+                return Err(Error::Proposal(
+                    "creation is not a field edit — approve the creation proposal".into(),
+                ));
+            }
             Field::Title => {
                 if value.contains('\n') {
                     return Err(Error::Proposal("title must be one line".into()));
@@ -383,8 +395,15 @@ impl Core {
         let current_text = fs::read_to_string(&issue_path)
             .map_err(|e| Error::Io(format!("{}: {e}", issue_path.display())))?;
         let current = IssueFile::parse(&current_text)?;
+        let stream_is_empty = self.read_stream(issue_id)?.is_empty();
         let baseline = self.last_sync_baseline(issue_id, &issue_path)?;
+        // #139 case 2: a human-created issue has an empty stream — its
+        // first sync establishes the initial AI-side baseline (the full
+        // current human format), not "nothing to sync".
         let changes = match &baseline {
+            _ if stream_is_empty => {
+                Self::human_format_changes(&Self::empty_baseline(&current), &current)
+            }
             Some(before) => Self::human_format_changes(before, &current),
             None => {
                 // No baseline resolvable (no prior sync, nothing at HEAD):
@@ -508,6 +527,110 @@ impl Core {
         changes
     }
 
+    /// #139: an agent's issue-creation proposal. The draft lives in the
+    /// stream (proposal record, field `create`, `draft` = title+body);
+    /// no `issue.md` is written — that happens only on approval (decision
+    /// 4: agents never write the human format, creation included).
+    /// One commit. Returns the proposal id.
+    pub fn propose_create(
+        &self,
+        issue_id: &str,
+        actor: &Actor,
+        now: &str,
+        title: &str,
+        body: &str,
+        rationale: &str,
+    ) -> Result<String> {
+        if !human::valid_issue_id(issue_id) {
+            return Err(Error::Proposal(format!("invalid issue id `{issue_id}`")));
+        }
+        if title.contains('\n') {
+            return Err(Error::Proposal("title must be a single line".into()));
+        }
+        let dir = self.issue_dir(issue_id)?;
+        if dir.join("issue.md").exists() {
+            return Err(Error::Proposal(format!(
+                "issue {issue_id} already exists — propose edits to it instead"
+            )));
+        }
+        if dir.join("agent.jsonl").exists() {
+            return Err(Error::Proposal(format!(
+                "a creation draft for {issue_id} already exists — approve or reject it first"
+            )));
+        }
+        let records = self.read_stream(issue_id)?;
+        let proposal_id = self.next_proposal_id(&records);
+        self.append_record(
+            issue_id,
+            json!({
+                "type": "proposal",
+                "ts": now,
+                "actor": actor.id,
+                "refs": [],
+                "data": {
+                    "proposal_id": proposal_id,
+                    "target": "issue.md",
+                    "field": "create",
+                    "current": "",
+                    "proposed": title,
+                    "rationale": rationale,
+                    "state": "proposed",
+                    "draft": { "title": title, "body": body }
+                }
+            }),
+        )?;
+        Ok(self.repo.commit_all(
+            &actor.author,
+            &format!("propose create {issue_id}: {title}"),
+        )?)
+    }
+
+    /// The creation draft for an issue, if a `create` proposal is pending.
+    pub fn creation_draft(&self, issue_id: &str) -> Result<Option<(String, String, String)>> {
+        let records = self.read_stream(issue_id)?;
+        for r in records.iter().rev() {
+            if r.get("type").and_then(Value::as_str) != Some("proposal") {
+                continue;
+            }
+            let data = r.get("data").cloned().unwrap_or(Value::Null);
+            if data.get("field").and_then(Value::as_str) != Some("create") {
+                continue;
+            }
+            let pid = data
+                .get("proposal_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            // Decided drafts are no longer pending.
+            let decided = records.iter().rev().any(|r2| {
+                let ty = r2.get("type").and_then(Value::as_str);
+                if ty != Some("approval") && ty != Some("rejection") {
+                    return false;
+                }
+                r2.get("data")
+                    .and_then(|d| d.get("proposal_id"))
+                    .and_then(Value::as_str)
+                    == Some(pid.as_str())
+            });
+            if decided {
+                return Ok(None);
+            }
+            let draft = data.get("draft").cloned().unwrap_or(Value::Null);
+            let title = draft
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let body = draft
+                .get("body")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            return Ok(Some((pid, title, body)));
+        }
+        Ok(None)
+    }
+
     /// `tissue propose <id>`: create a proposal record, set `needs-review`,
     /// exactly one commit. Returns the proposal id.
     pub fn propose(
@@ -588,21 +711,46 @@ impl Core {
             },
         )?;
 
+        // #139: a creation proposal has no issue.md yet — approval
+        // materializes the human format from the draft instead of applying
+        // a field edit to an existing file.
         let issue_path = self.issue_path(issue_id)?;
-        let expected = fs::read_to_string(&issue_path)
-            .map_err(|e| Error::Io(format!("{}: {e}", issue_path.display())))?;
-        let mut issue = IssueFile::from_path(&issue_path)?;
-        if decision == Decision::Approve {
-            let actual = Self::field_text(&issue, proposal.field);
-            if actual != proposal.current {
-                return Err(Error::Stale {
-                    proposal_id: proposal_id.to_string(),
-                    field: proposal.field.as_str().to_string(),
-                    current: proposal.current.clone(),
-                    actual,
-                });
+        if proposal.field == Field::Create {
+            if decision == Decision::Approve {
+                if issue_path.exists() {
+                    return Err(Error::Proposal(format!(
+                        "issue {issue_id} already exists — the creation proposal is stale"
+                    )));
+                }
+                let draft = self.creation_draft(issue_id)?.ok_or_else(|| {
+                    Error::Proposal(format!("proposal {proposal_id}: no pending creation draft"))
+                })?;
+                let (title, body) = (draft.1, draft.2);
+                let mut issue = IssueFile::new(issue_id, &title, IssueStatus::Open, &body, now)?;
+                issue.add_tag(NEEDS_REVIEW, now);
+                issue.remove_tag(NEEDS_REVIEW, now);
+                issue.write(&issue_path)?;
             }
-            self.apply_field(&mut issue, proposal.field, &proposal.proposed, now)?;
+        } else {
+            let expected = fs::read_to_string(&issue_path)
+                .map_err(|e| Error::Io(format!("{}: {e}", issue_path.display())))?;
+            let mut issue = IssueFile::from_path(&issue_path)?;
+            if decision == Decision::Approve {
+                let actual = Self::field_text(&issue, proposal.field);
+                if actual != proposal.current {
+                    return Err(Error::Stale {
+                        proposal_id: proposal_id.to_string(),
+                        field: proposal.field.as_str().to_string(),
+                        current: proposal.current.clone(),
+                        actual,
+                    });
+                }
+                self.apply_field(&mut issue, proposal.field, &proposal.proposed, now)?;
+            }
+            // Both decisions clear needs-review (the queue item is
+            // resolved either way).
+            issue.remove_tag(NEEDS_REVIEW, now);
+            issue.write_if_unchanged(&issue_path, &expected)?;
         }
 
         // Decision record (approval or rejection; rejection carries a reason —
@@ -642,10 +790,11 @@ impl Core {
             ProposalState::Approved | ProposalState::Rejected
         ));
 
-        issue.remove_tag(NEEDS_REVIEW, now);
-        issue.write_if_unchanged(&issue_path, &expected)?;
-
         let message = match decision {
+            Decision::Approve if proposal.field == Field::Create => format!(
+                "approve {issue_id}/{proposal_id}: create {}",
+                proposal.proposed
+            ),
             Decision::Approve => format!(
                 "approve {issue_id}/{proposal_id}: {} -> {}",
                 proposal.current, proposal.proposed
@@ -1023,6 +1172,10 @@ mod tests {
     fn sync_records_field_level_changes_and_commits() {
         let (dir, core) = temp_core();
         seed_issue(&core, "IAM-1");
+        // #139 case 2: the first sync on an empty stream establishes the
+        // baseline (full current state recorded).
+        core.sync("IAM-1", &human_actor(), "2026-10-08T11:30:00Z", "baseline")
+            .unwrap();
         human_edit(
             &core,
             "IAM-1",
@@ -1037,11 +1190,11 @@ mod tests {
         )
         .unwrap();
         let records = core.read_stream("IAM-1").unwrap();
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0]["type"], "human-sync");
-        assert_eq!(records[0]["seq"], 1);
-        assert!(records[0]["id"].as_str().unwrap().starts_with("rec-"));
-        let data = &records[0]["data"];
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[1]["type"], "human-sync");
+        assert_eq!(records[1]["seq"], 2);
+        assert!(records[1]["id"].as_str().unwrap().starts_with("rec-"));
+        let data = &records[1]["data"];
         // AC1: the record carries the exact field-level change.
         let changes = data["changes"].as_array().unwrap();
         assert_eq!(changes.len(), 1, "only the title moved: {changes:?}");
@@ -1058,14 +1211,19 @@ mod tests {
     fn sync_with_no_changes_since_baseline_is_a_noop() {
         let (dir, core) = temp_core();
         seed_issue(&core, "IAM-1");
-        // AC2: unchanged since baseline -> "nothing to sync", no record,
-        // no commit.
+        // #139 case 2: empty stream — the first sync establishes the
+        // baseline (one record, one commit).
+        core.sync("IAM-1", &human_actor(), "2026-10-08T12:00:00Z", "baseline")
+            .unwrap();
+        assert_eq!(core.read_stream("IAM-1").unwrap().len(), 1);
+        // Nothing changed since the baseline: "nothing to sync", no
+        // record, no commit.
         let before = core.repo().commit_count().unwrap();
         let err = core
-            .sync("IAM-1", &human_actor(), "2026-10-08T12:00:00Z", "x")
+            .sync("IAM-1", &human_actor(), "2026-10-08T12:30:00Z", "x")
             .unwrap_err();
         assert!(err.to_string().contains("nothing to sync"), "{err}");
-        assert!(core.read_stream("IAM-1").unwrap().is_empty());
+        assert_eq!(core.read_stream("IAM-1").unwrap().len(), 1);
         assert_eq!(core.repo().commit_count().unwrap(), before);
         let _ = fs::remove_dir_all(&dir);
     }

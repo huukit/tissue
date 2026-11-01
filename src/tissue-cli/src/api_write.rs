@@ -31,8 +31,17 @@ fn actor_from(id: &str) -> Actor {
     }
 }
 
-/// POST /api/issues: create an issue. One commit, same as the CLI path.
-pub fn create_issue(repo: &Path, id: &str, title: &str, actor_id: &str) -> Result<(), String> {
+/// POST /api/issues: create an issue. Human actors write the human format
+/// directly (they own it, decision 4); agent actors (#139) never do —
+/// their create becomes a creation proposal (needs-review) that a human
+/// approves, which is when issue.md is written.
+pub fn create_issue(
+    repo: &Path,
+    id: &str,
+    title: &str,
+    body: Option<&str>,
+    actor_id: &str,
+) -> Result<(), String> {
     if !valid_issue_id(id) {
         return Err(format!(
             "invalid issue id `{id}`: must match [A-Z]+-<number>"
@@ -41,12 +50,29 @@ pub fn create_issue(repo: &Path, id: &str, title: &str, actor_id: &str) -> Resul
     if title.contains('\n') {
         return Err("title must be one line".into());
     }
+    // #139: the four-case contract — an agent's create is a proposal.
+    // The draft (title+body) lives in the stream; a human approves, and
+    // only then does issue.md exist.
+    if actor_id.starts_with("agent:") {
+        let core = core_for(repo)?;
+        let actor = actor_from(actor_id);
+        core.propose_create(
+            id,
+            &actor,
+            &now_utc(),
+            title,
+            body.unwrap_or(""),
+            "agent-created issue awaiting review",
+        )
+        .map_err(|e| format!("propose create: {e}"))?;
+        return Ok(());
+    }
     let dir = issue_dir(repo, id);
     if dir.exists() {
         return Err(format!("issue `{id}` already exists"));
     }
     let now = now_utc();
-    let issue = IssueFile::new(id, title, IssueStatus::Open, "", &now)
+    let issue = IssueFile::new(id, title, IssueStatus::Open, body.unwrap_or(""), &now)
         .map_err(|e| format!("building issue: {e}"))?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     issue

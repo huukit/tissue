@@ -196,7 +196,8 @@ fn remote_agent_loop_end_to_end() {
     let server = start_server(&repo);
     let addr = &server.addr;
 
-    // create via API: 201, one commit
+    // create via API with an AGENT actor (#139): a creation proposal —
+    // no issue.md written, 201, one commit, draft in the stream.
     let before = repo.commit_count();
     let (status, _, body) = post(
         addr,
@@ -208,9 +209,44 @@ fn remote_agent_loop_end_to_end() {
         status.contains("201"),
         "create status: {status} body: {body}"
     );
+    assert!(
+        body.contains("proposed-needs-review"),
+        "agent create is a proposal: {body}"
+    );
     assert_eq!(repo.commit_count(), before + 1, "create = one commit");
+    assert!(
+        !repo.root.join(".tissue/issues/IAM-9/issue.md").exists(),
+        "agent create does not write issue.md (decision 4)"
+    );
+    let stream = std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-9/agent.jsonl"))
+        .expect("draft stream exists");
+    assert!(
+        stream.contains("\"field\":\"create\""),
+        "create draft: {stream}"
+    );
+    assert!(
+        !repo.root.join(".tissue/issues/IAM-9/issue.md").exists(),
+        "still no issue.md before approval"
+    );
 
-    // append an agent record via API: 201, one commit, seq reported
+    // list (read, tokenless) shows the draft as a needs-review item
+    let (status, body) = get(addr, "/api/issues");
+    assert!(status.contains("200"), "read status: {status}");
+    assert!(body.contains("IAM-9"), "draft listed: {body}");
+    assert!(body.contains("needs-review"), "flag visible: {body}");
+
+    // the human approves the creation: issue.md materializes, tag clears
+    let out = repo.tissue(&["approve", "IAM-9", "prop-01"]);
+    assert!(out.status.success(), "approve create failed: {out:?}");
+    let issue = std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-9/issue.md"))
+        .expect("issue.md materialized on approval");
+    assert!(
+        issue.contains("From the API"),
+        "draft title applied: {issue}"
+    );
+    assert!(!issue.contains("needs-review"), "tag cleared: {issue}");
+
+    // append an agent record via API: 201, one commit, seq continues
     let (status, _, body) = post(
         addr,
         "/api/issues/IAM-9/records",
@@ -221,10 +257,13 @@ fn remote_agent_loop_end_to_end() {
         status.contains("201"),
         "append status: {status} body: {body}"
     );
-    assert!(body.contains("\"seq\":1"), "seq reported: {body}");
-    assert_eq!(repo.commit_count(), before + 2, "append = one commit");
+    assert!(
+        body.contains("\"seq\":3"),
+        "seq continues past proposal+approval: {body}"
+    );
+    assert_eq!(repo.commit_count(), before + 3, "append = one commit");
 
-    // propose via API: 201, one commit, needs-review tag set
+    // propose a field edit via API: 201, one commit, needs-review tag set
     let (status, _, body) = post(
         addr,
         "/api/issues/IAM-9/propose",
@@ -235,17 +274,11 @@ fn remote_agent_loop_end_to_end() {
         status.contains("201"),
         "propose status: {status} body: {body}"
     );
-    assert!(body.contains("prop-01"), "proposal id: {body}");
-    assert_eq!(repo.commit_count(), before + 3, "propose = one commit");
-
-    // list (read, tokenless) shows the needs-review flag
-    let (status, body) = get(addr, "/api/issues");
-    assert!(status.contains("200"), "read status: {status}");
-    assert!(body.contains("IAM-9"), "issue listed: {body}");
-    assert!(body.contains("needs-review"), "flag visible: {body}");
+    assert!(body.contains("prop-02"), "proposal id: {body}");
+    assert_eq!(repo.commit_count(), before + 4, "propose = one commit");
 
     // human approves via the CLI: human format updates, tag clears
-    let out = repo.tissue(&["approve", "IAM-9", "prop-01"]);
+    let out = repo.tissue(&["approve", "IAM-9", "prop-02"]);
     assert!(out.status.success(), "approve failed: {out:?}");
     let issue = std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-9/issue.md"))
         .expect("read issue.md");

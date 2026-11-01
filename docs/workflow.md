@@ -25,7 +25,18 @@ them structurally — **neither side writes the other's file directly.**
 ## The two handoffs
 
 Data crosses between the formats only through explicit, trusted
-handoffs — never by one side parsing the other's raw edits mid-flight:
+handoffs — never by one side parsing the other's raw edits mid-flight.
+Who may do what is fixed (decision 4, creation included):
+
+- **An agent never writes `issue.md`** — not edits, not creation. An
+  agent's `POST /api/issues` is a **creation proposal**: the draft lives
+  in the agent stream, the issue is tagged `needs-review`, and `issue.md`
+  is only written when a human approves it.
+- **A human creates or edits `issue.md` directly** (CLI or GUI), then
+  presses **Sync** — on a fresh issue the first sync establishes the
+  AI-side baseline; after an edit it records the exact field-level change.
+- **An agent's edits are proposals** a human approves or rejects; a
+  rejection records the reason as data agents can learn from.
 
 **Human → AI: `tissue sync`.**
 After you edit `issue.md`, run

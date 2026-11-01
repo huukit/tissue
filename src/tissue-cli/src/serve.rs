@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 
-use tissue_core::human::{IssueFile, ReleaseFile};
+use tissue_core::human::{IssueFile, IssueStatus, ReleaseFile};
 use tissue_core::state::Decision;
 
 /// GUI assets embedded at compile time so a standalone binary serves the
@@ -358,14 +358,21 @@ fn api_write_create_issue(
         );
     };
     let actor_id = json_field(&v, "actor").unwrap_or("agent:api");
-    match crate::api_write::create_issue(repo, id, title, actor_id) {
+    // #134: optional body (the GUI prefills the CLI's Summary/AC template).
+    let body = json_field(&v, "body");
+    match crate::api_write::create_issue(repo, id, title, body, actor_id) {
         Ok(()) => respond_json(
             stream,
             201,
             &format!(
-                "{{\"created\":{},\"title\":{}}}",
+                "{{\"created\":{},\"title\":{},\"flow\":{}}}",
                 json_str(id),
-                json_str(title)
+                json_str(title),
+                if actor_id.starts_with("agent:") {
+                    json_str("proposed-needs-review")
+                } else {
+                    json_str("direct")
+                }
             ),
         ),
         Err(e) => respond_json(stream, 400, &format!("{{\"error\":{}}}", json_str(&e))),
@@ -651,10 +658,37 @@ fn scan_issues(repo: &Path, project_prefix: Option<&str>) -> Vec<IssueFile> {
                 }
             }
             issues.push(issue);
+            continue;
+        }
+        // #139: a creation draft (agent-proposed issue, no issue.md yet)
+        // surfaces as a needs-review pseudo-issue so the review queue
+        // and list can show it.
+        if let Some(draft) = creation_draft_summary(repo, &path) {
+            if let Some(p) = project_prefix {
+                if !draft.id.starts_with(&format!("{p}-")) {
+                    continue;
+                }
+            }
+            issues.push(draft);
         }
     }
     issues.sort_by(|a, b| a.id.cmp(&b.id));
     issues
+}
+
+/// A creation draft as a reviewable pseudo-issue: needs-review tag, the
+/// draft's title, timestamps from the proposal record.
+fn creation_draft_summary(repo: &Path, dir: &Path) -> Option<IssueFile> {
+    let name = dir.file_name().and_then(|n| n.to_str())?;
+    let Ok(grepo) = tissue_core::git::Repo::open(repo) else {
+        return None;
+    };
+    let core = tissue_core::sync::Core::new(grepo);
+    let draft = core.creation_draft(name).ok()??;
+    let (_pid, title, _body) = draft;
+    let mut issue = IssueFile::new(name, &title, IssueStatus::Open, "", "").ok()?;
+    issue.add_tag(tissue_core::human::NEEDS_REVIEW, "");
+    Some(issue)
 }
 
 fn issue_summary_json(issue: &IssueFile) -> String {
@@ -687,6 +721,14 @@ fn api_issues(
 fn api_issue_detail(stream: &mut TcpStream, repo: &Path, id: &str) -> Result<(), String> {
     let path = issues_dir(repo).join(id).join("issue.md");
     let Ok(issue) = IssueFile::from_path(&path) else {
+        // #139: a creation draft has no issue.md yet — serve the draft so
+        // the review queue's links work; approval materializes the file.
+        if let Some(draft) = creation_draft_summary(repo, &issues_dir(repo).join(id)) {
+            let mut summary = issue_summary_json(&draft);
+            summary.pop();
+            let body = "{\"issue\":".to_string() + &summary + ",\"revision\":0,\"body\":\"\"}";
+            return respond_json(stream, 200, &body);
+        }
         return respond_json(
             stream,
             404,
