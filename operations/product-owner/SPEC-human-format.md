@@ -20,6 +20,26 @@ projects:
 `--project <name>` filters on `tissue list` and `tissue serve` resolve the name
 to its prefix here; an issue's project is simply its id prefix. No schema change.
 
+`.tissue/config.yml` also carries two non-secret blocks (#137, #159):
+
+```yaml
+agent:                 # optional; absent = sync stays record-only
+  command: claude
+  args: ["-p", "sync {issue}"]
+  timeout_sec: 120
+  env: {}
+tokens:                # managed API tokens — SHA-256 hashes ONLY, never plaintext
+  - id: tok-01
+    label: human:tuomas
+    sha256: <hex>
+    created: 2026-11-01T19:00:00Z
+```
+
+The `agent:` block is whitelisted for `GET/PUT /api/config`; `tokens:` and
+any `api_token:` line are never returned by the API and never writable
+through it (`tissue token issue/list/revoke` manages tokens). Secrets live
+in the environment (`TISSUE_API_TOKEN`), never in this git-tracked file.
+
 ## File layout
 
 One Markdown file per unit of work, with YAML front matter:

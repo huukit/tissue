@@ -60,7 +60,7 @@ Three skins over one core, so humans and agents always see the same truth:
 
 ## Status
 
-Working PoC, feature-complete through the GUI roadmap. Shipped: `tissue-core` + `tissue-cli` (init/create/list/show/sync/propose/approve/reject/release, every mutation a git commit, optimistic revision guard on concurrent edits), multi-machine `pull`/`push` with rebase-only semantics, and the full `tissue serve` GUI — needs-review queue with browser approve/reject, agent-stream timeline, conflict-safe front-matter editing — over a token-authenticated REST write API. Plus a container image path, automated testing-machine deployment (`deploy/`), and a tag-triggered release workflow. Licensed GPL-3.0-only. The product state lives in [`operations/product-owner/STATE.md`](operations/product-owner/STATE.md), the roadmap in [`operations/project/ROADMAP.md`](operations/project/ROADMAP.md). Stack: Rust core/CLI, TypeScript GUI. Next milestone: the [PoC dogfood switch](https://github.com/huukit/tissue/issues/3) — run tissue's own issues in tissue.
+Working PoC, feature-complete through the GUI roadmap. Shipped: `tissue-core` + `tissue-cli` (init/create/list/show/sync/propose/approve/reject/release/project/token, every mutation a git commit, optimistic revision guard on concurrent edits), multi-machine `pull`/`push` with rebase-only semantics, and the full `tissue serve` GUI — needs-review queue with browser approve/reject, agent-stream timeline, conflict-safe front-matter editing, in-list New issue/New project buttons, a Settings page, and a version/license footer — over a token-authenticated REST write API. Sync records the exact field-level human-format diff and, when an `agent:` block is configured in `.tissue/config.yml`, invokes that agent command (timeout-bounded, token never exposed to it) and records the outcome. Write tokens are managed with hash-only storage (`tissue token issue/list/revoke`); `GET /api/meta` exposes version/license/API-version. Plus a container image path, automated testing-machine deployment running as a dedicated unprivileged user (`deploy/`), and a tag-triggered release workflow. Licensed GPL-3.0-only. The product state lives in [`operations/product-owner/STATE.md`](operations/product-owner/STATE.md), the roadmap in [`operations/project/ROADMAP.md`](operations/project/ROADMAP.md). Stack: Rust core/CLI, TypeScript GUI. Next milestone: the [PoC dogfood switch](https://github.com/huukit/tissue/issues/3) — run tissue's own issues in tissue.
 
 ## Getting started — standalone
 
@@ -84,7 +84,8 @@ toolchain, no node, no server dependencies.
 
 The viewer binds `127.0.0.1` exclusively — nothing is exposed beyond your
 machine. Reads need no token; write actions (approve/reject, edit, sync)
-require the repo's API token, entered once per browser session (kept in
+require the repo's API token — issue one with `tissue token issue` (only
+its hash is stored) — entered once per browser session (kept in
 sessionStorage only, never on disk).
 
 Full walkthrough — install variants, all three init modes, sha256

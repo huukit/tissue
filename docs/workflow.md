@@ -22,21 +22,28 @@ them structurally — **neither side writes the other's file directly.**
 - `agent.jsonl` is one JSON record per line, strictly append-only,
   with a contiguous sequence number per issue.
 
-## The two handoffs
+## The two handoffs — the four-case model
 
 Data crosses between the formats only through explicit, trusted
 handoffs — never by one side parsing the other's raw edits mid-flight.
 Who may do what is fixed (decision 4, creation included):
 
-- **An agent never writes `issue.md`** — not edits, not creation. An
-  agent's `POST /api/issues` is a **creation proposal**: the draft lives
-  in the agent stream, the issue is tagged `needs-review`, and `issue.md`
-  is only written when a human approves it.
-- **A human creates or edits `issue.md` directly** (CLI or GUI), then
-  presses **Sync** — on a fresh issue the first sync establishes the
-  AI-side baseline; after an edit it records the exact field-level change.
-- **An agent's edits are proposals** a human approves or rejects; a
-  rejection records the reason as data agents can learn from.
+1. **Agent creates** → proposal: an agent's `POST /api/issues` never
+   writes `issue.md`. The draft lives in the agent stream, the issue is
+   tagged `needs-review` (shown in `tissue list` as a `(pending proposal)`
+   row and in the GUI queue), and `issue.md` is only written when a human
+   approves it.
+2. **Human creates** → direct: a human's create writes `issue.md`
+   immediately (CLI or the GUI's "+ New issue"), and the first **Sync**
+   establishes the AI-side baseline.
+3. **Human edits** → `issue.md` directly, then **Sync** records the exact
+   field-level change (below).
+4. **Agent edits** → proposals a human approves or rejects; a rejection
+   records the reason as data agents can learn from.
+
+Each issue's derived **last touch** (`human` / `synced` / `ai-proposal`)
+is shown in `tissue list`, the API, and as a GUI badge — computed from the
+stream on read, never stored, so it cannot drift.
 
 **Human → AI: `tissue sync`.**
 After you edit `issue.md`, run
@@ -109,8 +116,9 @@ refused as stale.
 ## Every mutation is a git commit
 
 The issue repo is a plain git repo. `init`, `create`, `sync`,
-`propose`, `approve`, and `reject` each produce **exactly one commit**
-with a readable message:
+`propose`, `approve`, `reject`, `project`, and `token` each produce
+**exactly one commit** (an agent-invoking sync produces two: the sync
+record and the `agent-run` outcome) with a readable message:
 
 ```
 create IAM-1: First issue
@@ -125,4 +133,4 @@ stream and the commit).
 ## Where to next
 
 - [Getting started](getting-started.md) — install and first run
-- [CLI reference](cli-reference.md) — every command and flag
+- [CLI reference](cli-reference.md) — every command, flag, and API endpoint

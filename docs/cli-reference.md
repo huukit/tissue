@@ -281,9 +281,10 @@ tissue reject IAM-42 prop-01 --reason "premature: work not started"
 
 ## `tissue serve`
 
-Serve the read-only local viewer (GUI) on `127.0.0.1`. **Loopback-only:
-it binds `127.0.0.1` exclusively, refuses every non-GET request, and
-cannot be exposed to the network.** Stop it with Ctrl-C.
+Serve the local viewer (GUI) on `127.0.0.1`. **Loopback-only: it binds
+`127.0.0.1` exclusively and cannot be exposed to the network.** Reads
+(GET) are tokenless; every write endpoint is token-protected (see
+[API tokens](#api-tokens-159)). Stop it with Ctrl-C.
 
 ```sh
 tissue serve                 # http://127.0.0.1:7323
@@ -425,3 +426,4 @@ The token is resolved in this order on each write:
 
 Absent/empty everywhere means the write API is disabled (explicit 503 on
 every write attempt); a revoked or wrong token gets 401.
+

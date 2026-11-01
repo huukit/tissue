@@ -45,12 +45,18 @@ cargo build --release
 ## The 3-step first run
 
 ```sh
-tissue init                      # 1. create the issue repo
-tissue create DOC-1 "Write docs"  # 2. add your first issue
-tissue serve                     # 3. browse it
+tissue init                          # 1. create the issue repo
+tissue create DOC-1 "Write docs"     # 2. add your first issue
+tissue token issue --label human:me  # 3. issue a write-API token (printed once)
+tissue serve                         # 4. browse it
 ```
 
-Open <http://127.0.0.1:7323> — you should see your issue listed.
+Open <http://127.0.0.1:7323> — you should see your issue listed. Paste the
+token into the GUI's token bar to unlock write actions; the "+ New issue"
+button on the issues list creates issues straight from the browser. The
+**Settings** view (sidebar) shows the non-secret config — including the
+optional `agent:` block that makes the Sync button invoke your agent — and
+the footer shows the version, API version, and license (`GET /api/meta`).
 
 `tissue init` creates a `.tissue/` directory in the current directory
 (or the one you name) and initializes it as its own standalone git
@@ -130,8 +136,11 @@ Agents use the same token for the REST write API
 
 `deploy/` contains a systemd service + timer that keeps a testing machine
 on the latest release automatically: it polls GitHub Releases, sha256-
-verifies the download before swapping the binary, keeps one rollback
-copy, and never breaks the loopback-only binding. One-time setup in
+verifies the download before swapping the binary, refuses to activate a
+binary that fails `--version` (rollback copy kept), and never breaks the
+loopback-only binding. Both units run as a dedicated unprivileged `tissue`
+system user with the binary in `/opt/tissue/bin`. One-time setup (user
+creation, token `EnvironmentFile`, troubleshooting) in
 [deploy/README.md](../deploy/README.md).
 
 ## Where things live

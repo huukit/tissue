@@ -71,14 +71,23 @@ When null, the blocker is active; a later record sets `resolved_by` to a record 
 
 ### `human-sync`
 ```json
-{ "type": "human-sync", "data": { "trigger": "command", "summary_of_human_change": "...", "reconciliation": "steps 3-7 of rec-0192-0003 invalidated" } }
+{ "type": "human-sync", "data": { "trigger": "command", "summary_of_human_change": "...", "reconciliation": "...", "changes": [{"field": "title", "from": "...", "to": "..."}], "revision_before": 3, "revision_after": 4, "snapshot": "<full human format at sync time>" } }
 ```
-Written by the core when the human presses sync. This is the only record type an agent reads *before acting* — it invalidates prior plans.
+Written by the core when the human presses sync (#136). `changes` is the
+exact field-level diff (title/status/release/tags/body) since the last
+sync baseline; `snapshot` carries the full human format at sync time so the
+next sync's baseline survives rebases. On an empty stream the first sync
+records the full current state as the baseline (#139 case 2); no changes
+since the baseline means no record and no commit. This is the only record
+type an agent reads *before acting* — it invalidates prior plans.
 
 ### `proposal`
 ```json
-{ "type": "proposal", "data": { "proposal_id": "prop-01", "target": "issue.md", "field": "status", "current": "in-progress", "proposed": "closed", "rationale": "...", "state": "proposed | approved | rejected" } }
+{ "type": "proposal", "data": { "proposal_id": "prop-01", "target": "issue.md", "field": "status", "current": "in-progress", "proposed": "closed", "rationale": "...", "state": "proposed | approved | rejected", "draft": {"title": "...", "body": "..."} } }
 ```
+`field: "create"` with a `draft` payload is an agent's **creation
+proposal** (#139): no `issue.md` exists yet; approval materializes it.
+Ordinary field-edit proposals omit `draft`.
 An agent's proposed human-format edit. Requirements:
 - Must reference the **exact human-format text** it intends to change (`target` + `field` + `current`). Applying is refused if `current` no longer matches — stale proposals fail safe, they never clobber a newer human edit.
 - Creating it sets `tags: [needs-review]` on the human format (via core).
