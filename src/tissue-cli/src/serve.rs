@@ -299,17 +299,19 @@ fn api_put_route(
     if rest != "config" {
         return respond_json(stream, 404, "{\"error\":\"unknown api route\"}");
     }
-    let Some(token) = api_token(repo) else {
+    // #159: same token resolution as every write route (env override →
+    // managed hashes → legacy line).
+    if !write_auth_configured(repo) {
         return respond_json(
             stream,
             503,
-            "{\"error\":\"write API disabled: no api_token in .tissue/config.yml\"}",
+            "{\"error\":\"write API disabled: no token configured (tissue token issue, or TISSUE_API_TOKEN env)\"}",
         );
-    };
+    }
     match bearer_token(headers) {
-        Some(provided) if token_matches(&token, &provided) => {}
+        Some(provided) if resolve_token(repo, &provided).is_some() => {}
         Some(_) => {
-            return respond_json(stream, 401, "{\"error\":\"invalid or expired token\"}");
+            return respond_json(stream, 401, "{\"error\":\"invalid or revoked token\"}");
         }
         None => {
             return respond_json(
