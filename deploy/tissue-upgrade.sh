@@ -29,9 +29,19 @@ trap 'rm -rf "$WORK"' EXIT
 log() { printf 'tissue-upgrade: %s\n' "$*" >&2; }
 
 # --- 1. What is the latest release? ----------------------------------------
-latest_tag="$(curl -fsSL --max-time 30 \
-    "https://api.github.com/repos/${REPO_SLUG}/releases/latest" \
-    | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
+# Fetch the whole JSON body to a file first: piping curl into `grep -m1`
+# makes grep exit after the first match, curl then gets EPIPE on the
+# remaining body and exits 23 (CURLE_WRITE_ERROR), which `set -o pipefail`
+# turns into a script failure (#130) once the release body exceeds the pipe
+# buffer.
+release_json="$WORK/release.json"
+if ! curl -fsSL --max-time 30 -o "$release_json" \
+    "https://api.github.com/repos/${REPO_SLUG}/releases/latest"; then
+    log "could not fetch the latest release metadata"
+    exit 1
+fi
+latest_tag="$(grep -m1 '"tag_name"' "$release_json" \
+    | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
 if [ -z "$latest_tag" ]; then
     log "could not determine the latest release tag"
     exit 1
@@ -41,9 +51,7 @@ fi
 # are versioned, so nothing is hardcoded). The pattern is a shell glob,
 # matched with `case` (NOT grep -x: in grep, `*` is a regex quantifier,
 # not a glob wildcard, and the pattern can never match).
-latest_assets="$(curl -fsSL --max-time 30 \
-    "https://api.github.com/repos/${REPO_SLUG}/releases/latest" \
-    | grep -o '"name": *"tissue-[^"]*"' \
+latest_assets="$(grep -o '"name": *"tissue-[^"]*"' "$release_json" \
     | sed -E 's/.*"name": *"([^"]+)".*/\1/')"
 ASSET=""
 # shellcheck disable=SC2254 # $ASSET_PATTERN is unquoted on purpose: the
