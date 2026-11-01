@@ -64,6 +64,11 @@ enum Commands {
         /// Show what init would do, write nothing.
         #[arg(long)]
         dry_run: bool,
+        /// Re-import over issue ids that already exist in the target
+        /// repo (default: skip them — re-running an import is a no-op,
+        /// #162).
+        #[arg(long)]
+        force: bool,
     },
     /// Create a new issue.
     Create {
@@ -352,6 +357,7 @@ fn run(cli: Cli) -> Result<(), String> {
             dir,
             id_prefix,
             dry_run,
+            force,
         } => bootstrap::run(
             &repo,
             &bootstrap::InitOptions {
@@ -361,6 +367,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 dir,
                 id_prefix,
                 dry_run,
+                force,
             },
         ),
         Commands::Create {

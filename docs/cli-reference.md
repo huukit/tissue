@@ -27,7 +27,8 @@ Writes: a new git repo containing `.tissue/config.yml` (and
 | Flag | Meaning |
 |---|---|
 | `--project <NAME>` | Project name written to `.tissue/config.yml` (defaults to the directory name) |
-| `--from-github <OWNER/NAME>` | Import existing issues from a GitHub repository as part of setup (needs `gh` authenticated) |
+| `--from-github <OWNER/NAME>` | Import existing issues from a GitHub repository as part of setup (needs `gh` authenticated); imports **all** issues incl. closed, idempotent (#162) |
+| `--force` | Re-import over issue ids that already exist (default: skip — re-running an import is a no-op, #162) |
 | `--remote <PATH>` | Configure a filesystem git remote at this path (fully offline); created if it does not exist |
 | `--dir <DIR>` | Issue repository location (default: `<project>-issues/` under the current directory when a remote or import source is given, otherwise the current directory) |
 | `--id-prefix <PREFIX>` | Tissue id prefix for imported issues (default: `IAM`) |

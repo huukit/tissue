@@ -67,6 +67,17 @@ repo. Two commits appear: the git `init` and `tissue init: config.yml`.
 **GitHub import** requires the `gh` CLI installed and authenticated
 (`gh auth login`). Imported issues keep their titles/bodies and get
 tissue ids under the `--id-prefix` (default `IAM-1`, `IAM-2`, …).
+The import covers **all** issues (open and closed — merged PRs import as
+`closed`), maps labels to tags (sanitized to a safe charset; the reserved
+`needs-review` tag is never imported), and writes comments to each issue's
+`agent.jsonl` as observation records. Re-running is a no-op for existing
+ids (`--force` re-imports). For a full dry run of a repo into a scratch
+dir, writing nothing but a JSON report:
+
+```sh
+tools/import_github_issues.py --repo OWNER/REPO --all \
+  --out /tmp/scratch --dry-run --report /tmp/report.json
+```
 
 **Filesystem remote** configures a bare git remote at the given path
 (created if missing) so every local mutation can be pushed — a

@@ -30,6 +30,8 @@ pub struct InitOptions {
     pub dir: Option<PathBuf>,
     pub id_prefix: String,
     pub dry_run: bool,
+    /// #162: re-import over existing issue ids.
+    pub force: bool,
 }
 
 struct IssueJson {
@@ -79,7 +81,9 @@ pub fn run(repo_root: &Path, opts: &InitOptions) -> Result<(), String> {
     )?;
 
     if let Some(gh_repo) = &opts.from_github {
-        import_github(gh_repo, &issue_repo, &opts.id_prefix)?;
+        // #162: import all issues (open+closed) for a cutover; --force
+        // re-imports over existing ids (default: skip them, idempotent).
+        import_github(gh_repo, &issue_repo, &opts.id_prefix, true, opts.force)?;
     }
 
     println!(
@@ -183,34 +187,61 @@ fn git_command(args: &[&str]) -> Result<(), String> {
     }
 }
 
-fn import_github(gh_repo: &str, issue_repo: &Path, id_prefix: &str) -> Result<(), String> {
-    let numbers = list_github_issues(gh_repo)?;
+fn import_github(
+    gh_repo: &str,
+    issue_repo: &Path,
+    id_prefix: &str,
+    all: bool,
+    force: bool,
+) -> Result<(), String> {
+    let numbers = list_github_issues(gh_repo, all)?;
+    let state_word = if all {
+        "issues (open+closed)"
+    } else {
+        "open issues"
+    };
     if numbers.is_empty() {
-        println!("no open issues found in {gh_repo}; nothing to import");
+        println!("no {state_word} found in {gh_repo}; nothing to import");
         return Ok(());
     }
     let mut count = 0;
+    let mut skipped = 0;
     for number in numbers {
         let issue = fetch_github_issue(gh_repo, number)?;
         let tid = format!("{id_prefix}-{number}");
         let dir = issue_repo.join(".tissue").join("issues").join(&tid);
+        // #162: idempotent re-import — skip existing ids unless --force.
+        if dir.join("issue.md").exists() && !force {
+            skipped += 1;
+            continue;
+        }
         std::fs::create_dir_all(&dir).map_err(|e| format!("creating {tid}: {e}"))?;
         let content = render_issue_md(&issue, &tid, gh_repo);
         std::fs::write(dir.join("issue.md"), content).map_err(|e| format!("writing {tid}: {e}"))?;
         count += 1;
+    }
+    if skipped > 0 {
+        println!("skipped {skipped} already-imported issue(s) (use --force to re-import)");
     }
     let grepo = Repo::open(issue_repo).map_err(|e| format!("opening repo: {e}"))?;
     let msg = format!("Import {count} issue(s) from GitHub");
     grepo
         .commit_all_if_changed(&tissue_author(), &msg)
         .map_err(|e| format!("committing import: {e}"))?;
+    println!(
+        "imported {count} issue(s) from {gh_repo} into {}",
+        issue_repo.display()
+    );
     Ok(())
 }
 
-fn list_github_issues(gh_repo: &str) -> Result<Vec<u64>, String> {
+fn list_github_issues(gh_repo: &str, all: bool) -> Result<Vec<u64>, String> {
+    // #162: --all includes closed issues (full archive for cutover);
+    // default stays open-only (the pre-#162 behavior).
+    let state = if all { "all" } else { "open" };
     let out = Command::new("gh")
         .args([
-            "issue", "list", "--repo", gh_repo, "--state", "open", "--limit", "1000", "--json",
+            "issue", "list", "--repo", gh_repo, "--state", state, "--limit", "1000", "--json",
             "number",
         ])
         .output()
