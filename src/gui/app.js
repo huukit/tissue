@@ -67,6 +67,21 @@ async function postJson(url, body) {
     }
     return data;
 }
+/** #137: PUT helper for /api/config (token-protected write). */
+async function putJson(url, body) {
+    var _a;
+    const token = getToken();
+    const res = await fetch(url, {
+        method: "PUT",
+        headers: Object.assign({ "Content-Type": "application/json" }, (token ? { Authorization: `Bearer ${token}` } : {})),
+        body: JSON.stringify(body),
+    });
+    const data = (await res.json().catch(() => null));
+    if (!res.ok) {
+        throw new Error((_a = data === null || data === void 0 ? void 0 : data.error) !== null && _a !== void 0 ? _a : `request failed: ${res.status}`);
+    }
+    return data;
+}
 async function fetchJson(url) {
     var _a;
     const res = await fetch(url, { method: "GET" });
@@ -577,6 +592,91 @@ async function renderReleaseDetail(id) {
         el.innerHTML = `<p class="error">${esc(e instanceof Error ? e.message : String(e))}</p>`;
     }
 }
+/** #137: the Settings view — whitelisted config (agent block, project,
+ * remote) with token-authed editing via PUT /api/config. `api_token` is
+ * never fetched, displayed, or accepted by the API. */
+async function renderSettings() {
+    var _a, _b, _c, _d, _e;
+    const el = app();
+    if (!el)
+        return;
+    el.innerHTML = `
+    <h2 class="view-title">Settings</h2>
+    ${tokenBarHtml()}
+    <div class="settings-box">
+      <p class="settings-note">Non-secret parts of <code>.tissue/config.yml</code>.
+        The API token is never shown here — set it via <code>TISSUE_API_TOKEN</code>
+        or the <code>api_token:</code> line in the repo (env var recommended).</p>
+      <label>Agent command
+        <input id="cfg-agent-command" type="text" placeholder="e.g. claude (empty = sync stays record-only)">
+      </label>
+      <label>Agent args (one per line; <code>{issue}</code> is replaced with the issue id)
+        <textarea id="cfg-agent-args" rows="3"></textarea>
+      </label>
+      <label>Agent timeout (seconds)
+        <input id="cfg-agent-timeout" type="number" min="1" step="1">
+      </label>
+      <label>Remote
+        <input id="cfg-remote" type="text" placeholder="e.g. /srv/tissue-remote (empty = none)">
+      </label>
+      <button id="cfg-save" class="btn">Save settings</button>
+      <p id="cfg-result" class="edit-result" aria-live="polite"></p>
+      <h3>Current config (whitelisted)</h3>
+      <pre id="cfg-view" class="cfg-view">loading…</pre>
+    </div>`;
+    bindTokenBar();
+    let cfg = {};
+    try {
+        cfg = await fetchJson("/api/config");
+    }
+    catch (e) {
+        document.getElementById("cfg-view").textContent = String(e instanceof Error ? e.message : e);
+    }
+    const agent = cfg.agent;
+    document.getElementById("cfg-agent-command").value = (_a = agent === null || agent === void 0 ? void 0 : agent.command) !== null && _a !== void 0 ? _a : "";
+    document.getElementById("cfg-agent-args").value =
+        ((_b = agent === null || agent === void 0 ? void 0 : agent.args) !== null && _b !== void 0 ? _b : []).join("\n");
+    document.getElementById("cfg-agent-timeout").value =
+        String((_c = agent === null || agent === void 0 ? void 0 : agent.timeout_sec) !== null && _c !== void 0 ? _c : 120);
+    document.getElementById("cfg-remote").value = (_d = cfg.remote) !== null && _d !== void 0 ? _d : "";
+    document.getElementById("cfg-view").textContent = JSON.stringify(cfg, null, 2);
+    (_e = document.getElementById("cfg-save")) === null || _e === void 0 ? void 0 : _e.addEventListener("click", async () => {
+        const result = document.getElementById("cfg-result");
+        if (!result)
+            return;
+        const command = document.getElementById("cfg-agent-command").value.trim();
+        const args = document.getElementById("cfg-agent-args").value
+            .split("\n")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0);
+        const timeoutRaw = document.getElementById("cfg-agent-timeout").value.trim();
+        const timeout = timeoutRaw ? parseInt(timeoutRaw, 10) : NaN;
+        if (timeoutRaw && (!Number.isFinite(timeout) || timeout < 1)) {
+            result.textContent = "Timeout must be a positive number of seconds.";
+            return;
+        }
+        const remote = document.getElementById("cfg-remote").value.trim();
+        const update = {
+            remote,
+            agent: command
+                ? { command, args, timeout_sec: timeoutRaw ? timeout : 120 }
+                : null,
+            actor: "human:gui",
+        };
+        result.textContent = "…";
+        try {
+            await putJson("/api/config", update);
+            result.textContent = "Saved — config updated and committed.";
+            await renderSettings();
+        }
+        catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            result.textContent = /401|token/i.test(msg)
+                ? "Saving failed — set the API token first (it protects all write actions)."
+                : msg;
+        }
+    });
+}
 function renderInline(text) {
     let s = esc(text);
     s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
@@ -722,7 +822,7 @@ function wireEditForm(issue) {
         }
     });
     sync.addEventListener("click", async () => {
-        var _a;
+        var _a, _b;
         result.textContent = "…";
         const summary = prompt("One-line summary of your edit (recorded with the exact field-level changes):");
         if (!summary) {
@@ -734,11 +834,22 @@ function wireEditForm(issue) {
             // baseline and records it — agents reconcile from that data.
             const r = await postJson(`/api/issues/${encodeURIComponent(issue.id)}/sync`, { summary, actor: "human:gui" });
             if (r.synced) {
-                result.textContent = "Synced — your changes are recorded in the agent stream for agents to reconcile from.";
+                // #137: if an agent is configured, the sync also ran it; show the outcome.
+                if (r.agent_run) {
+                    const a = r.agent_run;
+                    result.textContent = a.success
+                        ? `Synced — changes recorded, and the configured agent ran ok (${a.duration_ms} ms).`
+                        : a.timed_out
+                            ? `Synced — changes recorded; the configured agent timed out (recorded as a failure note).`
+                            : `Synced — changes recorded; the configured agent failed (exit ${(_a = a.exit_code) !== null && _a !== void 0 ? _a : "?"}).`;
+                }
+                else {
+                    result.textContent = "Synced — your changes are recorded in the agent stream for agents to reconcile from. (No agent configured — record only.)";
+                }
                 void route();
             }
             else {
-                result.textContent = (_a = r.reason) !== null && _a !== void 0 ? _a : "Nothing to sync — no changes since the last sync.";
+                result.textContent = (_b = r.reason) !== null && _b !== void 0 ? _b : "Nothing to sync — no changes since the last sync.";
             }
         }
         catch (e) {
@@ -848,7 +959,7 @@ async function route() {
         return;
     }
     await loadIssues();
-    const view = /^#\/(review|releases)/.exec(hash);
+    const view = /^#\/(review|releases|settings)/.exec(hash);
     if (view && view[1] === "review") {
         updateNav("review");
         await renderReviewQueue();
@@ -857,6 +968,11 @@ async function route() {
     if (view && view[1] === "releases") {
         updateNav("releases");
         renderReleases();
+        return;
+    }
+    if (view && view[1] === "settings") {
+        updateNav("settings");
+        await renderSettings();
         return;
     }
     updateNav("issues");

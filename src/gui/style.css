@@ -358,6 +358,39 @@ body {
 .last-touch-synced { border-color: #2a7; color: #166; background: #eef8f3; }
 .last-touch-ai-proposal { border-color: #c73; color: #a52; background: #fdf3ec; }
 
+/* #137: Settings view. */
+.settings-box {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1.5rem;
+  max-width: 40rem;
+}
+.settings-box label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.85rem;
+  color: var(--muted);
+  gap: 0.25rem;
+  margin-bottom: 0.7rem;
+}
+.settings-box input, .settings-box textarea {
+  font: inherit;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 4px;
+  background: var(--bg, #fff);
+  color: inherit;
+}
+.settings-note { font-size: 0.85rem; color: var(--muted); }
+.cfg-view {
+  background: var(--bg);
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.8rem;
+}
+
 /* #135: the "+ New project" form in the sidebar project block. */
 .new-project-form {
   display: flex;

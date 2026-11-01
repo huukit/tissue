@@ -75,6 +75,27 @@ interface StreamRecord {
   data: { type?: string; [k: string]: unknown };
 }
 
+/** #137: whitelisted view of .tissue/config.yml as served by GET /api/config. */
+interface ConfigView {
+  project?: string;
+  remote?: string;
+  agent?: {
+    command: string;
+    args?: string[];
+    timeout_sec?: number;
+    env?: Record<string, string>;
+  };
+  [k: string]: unknown;
+}
+
+/** #137: agent-run outcome returned by POST /api/issues/:id/sync. */
+interface AgentRunOutcome {
+  exit_code: number | null;
+  timed_out: boolean;
+  duration_ms: number;
+  success: boolean;
+}
+
 /** API token, sessionStorage only — never persisted server-side (#98 AC5). */
 const TOKEN_KEY = "tissue-api-token";
 
@@ -109,6 +130,24 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   const token = getToken();
   const res = await fetch(url, {
     method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  const data = (await res.json().catch(() => null)) as { error?: string } | null;
+  if (!res.ok) {
+    throw new Error(data?.error ?? `request failed: ${res.status}`);
+  }
+  return data as T;
+}
+
+/** #137: PUT helper for /api/config (token-protected write). */
+async function putJson<T>(url: string, body: unknown): Promise<T> {
+  const token = getToken();
+  const res = await fetch(url, {
+    method: "PUT",
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -659,6 +698,88 @@ async function renderReleaseDetail(id: string): Promise<void> {
   }
 }
 
+/** #137: the Settings view — whitelisted config (agent block, project,
+ * remote) with token-authed editing via PUT /api/config. `api_token` is
+ * never fetched, displayed, or accepted by the API. */
+async function renderSettings(): Promise<void> {
+  const el = app();
+  if (!el) return;
+  el.innerHTML = `
+    <h2 class="view-title">Settings</h2>
+    ${tokenBarHtml()}
+    <div class="settings-box">
+      <p class="settings-note">Non-secret parts of <code>.tissue/config.yml</code>.
+        The API token is never shown here — set it via <code>TISSUE_API_TOKEN</code>
+        or the <code>api_token:</code> line in the repo (env var recommended).</p>
+      <label>Agent command
+        <input id="cfg-agent-command" type="text" placeholder="e.g. claude (empty = sync stays record-only)">
+      </label>
+      <label>Agent args (one per line; <code>{issue}</code> is replaced with the issue id)
+        <textarea id="cfg-agent-args" rows="3"></textarea>
+      </label>
+      <label>Agent timeout (seconds)
+        <input id="cfg-agent-timeout" type="number" min="1" step="1">
+      </label>
+      <label>Remote
+        <input id="cfg-remote" type="text" placeholder="e.g. /srv/tissue-remote (empty = none)">
+      </label>
+      <button id="cfg-save" class="btn">Save settings</button>
+      <p id="cfg-result" class="edit-result" aria-live="polite"></p>
+      <h3>Current config (whitelisted)</h3>
+      <pre id="cfg-view" class="cfg-view">loading…</pre>
+    </div>`;
+  bindTokenBar();
+  let cfg: ConfigView = {};
+  try {
+    cfg = await fetchJson<ConfigView>("/api/config");
+  } catch (e) {
+    document.getElementById("cfg-view")!.textContent = String(e instanceof Error ? e.message : e);
+  }
+  const agent = cfg.agent;
+  (document.getElementById("cfg-agent-command") as HTMLInputElement).value = agent?.command ?? "";
+  (document.getElementById("cfg-agent-args") as HTMLTextAreaElement).value =
+    (agent?.args ?? []).join("\n");
+  (document.getElementById("cfg-agent-timeout") as HTMLInputElement).value =
+    String(agent?.timeout_sec ?? 120);
+  (document.getElementById("cfg-remote") as HTMLInputElement).value = cfg.remote ?? "";
+  document.getElementById("cfg-view")!.textContent = JSON.stringify(cfg, null, 2);
+
+  document.getElementById("cfg-save")?.addEventListener("click", async () => {
+    const result = document.getElementById("cfg-result");
+    if (!result) return;
+    const command = (document.getElementById("cfg-agent-command") as HTMLInputElement).value.trim();
+    const args = (document.getElementById("cfg-agent-args") as HTMLTextAreaElement).value
+      .split("\n")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    const timeoutRaw = (document.getElementById("cfg-agent-timeout") as HTMLInputElement).value.trim();
+    const timeout = timeoutRaw ? parseInt(timeoutRaw, 10) : NaN;
+    if (timeoutRaw && (!Number.isFinite(timeout) || timeout < 1)) {
+      result.textContent = "Timeout must be a positive number of seconds.";
+      return;
+    }
+    const remote = (document.getElementById("cfg-remote") as HTMLInputElement).value.trim();
+    const update: Record<string, unknown> = {
+      remote,
+      agent: command
+        ? { command, args, timeout_sec: timeoutRaw ? timeout : 120 }
+        : null,
+      actor: "human:gui",
+    };
+    result.textContent = "…";
+    try {
+      await putJson<{ updated: boolean }>("/api/config", update);
+      result.textContent = "Saved — config updated and committed.";
+      await renderSettings();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      result.textContent = /401|token/i.test(msg)
+        ? "Saving failed — set the API token first (it protects all write actions)."
+        : msg;
+    }
+  });
+}
+
 function renderInline(text: string): string {
   let s = esc(text);
   s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
@@ -819,12 +940,22 @@ function wireEditForm(issue: IssueDetail): void {
     try {
       // #136: sync computes the field-level diff since the last sync
       // baseline and records it — agents reconcile from that data.
-      const r = await postJson<{ synced: boolean; reason?: string }>(
+      const r = await postJson<{ synced: boolean; reason?: string; agent_run?: AgentRunOutcome | null }>(
         `/api/issues/${encodeURIComponent(issue.id)}/sync`,
         { summary, actor: "human:gui" }
       );
       if (r.synced) {
-        result.textContent = "Synced — your changes are recorded in the agent stream for agents to reconcile from.";
+        // #137: if an agent is configured, the sync also ran it; show the outcome.
+        if (r.agent_run) {
+          const a = r.agent_run;
+          result.textContent = a.success
+            ? `Synced — changes recorded, and the configured agent ran ok (${a.duration_ms} ms).`
+            : a.timed_out
+              ? `Synced — changes recorded; the configured agent timed out (recorded as a failure note).`
+              : `Synced — changes recorded; the configured agent failed (exit ${a.exit_code ?? "?"}).`;
+        } else {
+          result.textContent = "Synced — your changes are recorded in the agent stream for agents to reconcile from. (No agent configured — record only.)";
+        }
         void route();
       } else {
         result.textContent = r.reason ?? "Nothing to sync — no changes since the last sync.";
@@ -936,7 +1067,7 @@ async function route(): Promise<void> {
     return;
   }
   await loadIssues();
-  const view = /^#\/(review|releases)/.exec(hash);
+  const view = /^#\/(review|releases|settings)/.exec(hash);
   if (view && view[1] === "review") {
     updateNav("review");
     await renderReviewQueue();
@@ -945,6 +1076,11 @@ async function route(): Promise<void> {
   if (view && view[1] === "releases") {
     updateNav("releases");
     renderReleases();
+    return;
+  }
+  if (view && view[1] === "settings") {
+    updateNav("settings");
+    await renderSettings();
     return;
   }
   updateNav("issues");

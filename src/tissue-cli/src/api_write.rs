@@ -164,12 +164,21 @@ pub fn propose(
 /// POST /api/issues/<id>/sync: record a human edit in the AI stream —
 /// the sync button's server side (#99, decision 4's human->AI handoff).
 /// Same core path as the CLI: one `human-sync` record + one commit.
-pub fn sync(repo: &Path, id: &str, summary: &str, actor_id: &str) -> Result<(), String> {
+/// #137: when an `agent:` block is configured, the agent is invoked after
+/// the record and its outcome is appended as an `agent-run` record; the
+/// outcome is returned so the GUI can show it.
+pub fn sync(
+    repo: &Path,
+    id: &str,
+    summary: &str,
+    actor_id: &str,
+) -> Result<Option<tissue_core::config::AgentRunOutcome>, String> {
     let core = core_for(repo)?;
     let actor = actor_from(actor_id);
-    core.sync(id, &actor, &now_utc(), summary)
+    let (_commit, outcome) = core
+        .sync_and_run_agent(id, &actor, &now_utc(), summary)
         .map_err(|e| format!("sync: {e}"))?;
-    Ok(())
+    Ok(outcome)
 }
 
 /// POST /api/issues/<id>/edit: apply a human front-matter edit with the

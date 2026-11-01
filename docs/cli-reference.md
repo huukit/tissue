@@ -173,6 +173,15 @@ Commits: exactly one, `sync <ID>: <summary>`. If nothing changed since the
 last sync, the command reports `nothing to sync` and makes no record and
 no commit.
 
+If an `agent:` block is configured in `.tissue/config.yml` (see
+[Agent connection](#agent-connection) below), sync additionally **invokes
+the configured agent**: the command runs with the issue repo as its working
+directory, receives a JSON envelope `{issue, revision, changes,
+stream_tail}` on stdin, and its outcome (exit code, timeout, duration) is
+appended as an `agent-run` record with one more commit. A failing or
+hanging agent never fails the sync itself — the failure is recorded as
+data. With no `agent:` block, sync stays record-only.
+
 ```sh
 tissue sync IAM-42 --summary "rewrote acceptance criteria"
 tissue sync IAM-42 --summary "..." --actor human:tuomas
@@ -182,6 +191,33 @@ tissue sync IAM-42 --summary "..." --actor human:tuomas
 |---|---|
 | `--summary <TEXT>` | One-line summary of what you changed and why (required) |
 | `--actor <ID>` | Human identity recorded in the stream and commit (default `human:local`) |
+
+---
+
+## Agent connection (`agent:` in `.tissue/config.yml`) (#137)
+
+The `agent:` block configures the command that `tissue sync` and the GUI's
+**Sync** button invoke after recording the human edit. The file is
+git-tracked and holds **no secrets** — API tokens stay in the environment.
+
+```yaml
+project: e2e
+agent:
+  command: "claude"             # executable resolved on the serve host's PATH
+  args: ["-p", "sync {issue}"]  # {issue} is replaced with the issue id
+  timeout_sec: 120              # wall-clock timeout; the agent is killed on expiry
+  env: {}                       # extra env for the agent process (TISSUE_API_TOKEN is never passed)
+```
+
+Missing `agent:` block = sync behaves record-only (backwards compatible).
+The spawned process always runs with the issue repo as cwd; the API token
+is never in its argv or environment, and nothing is logged from it beyond
+a capped stderr tail in the `agent-run` record.
+
+The same settings are viewable and editable in the GUI under **Settings**
+via `GET /api/config` (whitelisted keys only — `api_token` is never
+returned) and `PUT /api/config` (token-protected; non-whitelisted keys are
+rejected, one commit per change).
 
 ---
 
@@ -305,6 +341,11 @@ Finalize a release: sets `status: cut` (close-out commit), appends a
 validation). Cutting an
 already-cut release fails. Commits: exactly one, `release cut <ID>`.
 | `--project <NAME>` | Filter the viewer to one project (name → id prefix from `.tissue/config.yml`); the issues list and detail routes show only that project's issues |
+
+### Config API (#137)
+
+- `GET /api/config` — tokenless read of the **whitelisted** config view: `project`, `remote`, `agent`. `api_token` is never returned.
+- `PUT /api/config` — token-protected write: a JSON object of top-level keys (`agent`, `remote`, `project`); `api_token` and any other key are rejected with 400 before anything is written. One `config update via api` commit per change. `{"agent": null}` removes the agent block (sync goes back to record-only).
 
 ### Projects API (#135)
 

@@ -4,6 +4,7 @@
 //! UI-free by design: no interface crate implements business logic here.
 
 pub mod agent;
+pub mod config;
 pub mod git;
 pub mod human;
 pub mod projects;

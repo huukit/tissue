@@ -97,6 +97,9 @@ pub enum RecordType {
     Proposal,
     Approval,
     Rejection,
+    /// #137: the core's record of one agent invocation after a sync
+    /// (exit code / timeout / duration). Core-only, like human-sync.
+    AgentRun,
 }
 
 impl RecordType {
@@ -194,6 +197,18 @@ pub enum RecordData {
         proposal_id: String,
         reason: String,
     },
+    /// #137: outcome of one agent invocation spawned by sync. Written by
+    /// the core only (invariant 4, like human-sync) — agents never forge
+    /// run outcomes.
+    AgentRun {
+        issue: String,
+        command: String,
+        exit_code: Option<i32>,
+        timed_out: bool,
+        duration_ms: u64,
+        #[serde(default)]
+        stderr_tail: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -216,6 +231,7 @@ impl RecordData {
             RecordData::Proposal { .. } => RecordType::Proposal,
             RecordData::Approval { .. } => RecordType::Approval,
             RecordData::Rejection { .. } => RecordType::Rejection,
+            RecordData::AgentRun { .. } => RecordType::AgentRun,
         }
     }
 }
@@ -612,6 +628,63 @@ mod tests {
         let path = dir.join("agent.jsonl");
         let _ = std::fs::remove_file(&path);
         (AgentStream::open(&path).unwrap(), path)
+    }
+
+    /// #137: `agent-run` is a core-only record type — it round-trips
+    /// through the typed reader and agents may not write it.
+    #[test]
+    fn agent_run_round_trips_and_is_core_only() {
+        let (mut stream, path) = tmp_stream("agent-run");
+        let rec = stream
+            .append_core(
+                RecordData::AgentRun {
+                    issue: "IAM-1".into(),
+                    command: "stub sync IAM-1".into(),
+                    exit_code: Some(0),
+                    timed_out: false,
+                    duration_ms: 42,
+                    stderr_tail: String::new(),
+                },
+                "2026-11-01T13:00:00Z",
+            )
+            .unwrap();
+        assert_eq!(rec.record_type, RecordType::AgentRun);
+        assert!(!RecordType::AgentRun.agent_writable());
+        drop(stream);
+        let reopened = AgentStream::open(&path).unwrap();
+        assert_eq!(reopened.records().len(), 1);
+        match &reopened.records()[0].data {
+            RecordData::AgentRun {
+                issue,
+                exit_code,
+                timed_out,
+                duration_ms,
+                ..
+            } => {
+                assert_eq!(issue, "IAM-1");
+                assert_eq!(*exit_code, Some(0));
+                assert!(!timed_out);
+                assert_eq!(*duration_ms, 42);
+            }
+            other => panic!("expected agent-run, got {other:?}"),
+        }
+        let mut s2 = AgentStream::open(&path).unwrap();
+        let err = s2
+            .append_agent(
+                RecordData::AgentRun {
+                    issue: "IAM-1".into(),
+                    command: "x".into(),
+                    exit_code: Some(0),
+                    timed_out: false,
+                    duration_ms: 0,
+                    stderr_tail: String::new(),
+                },
+                "agent:dev-1",
+                "2026-11-01T13:01:00Z",
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("may not write"), "{err}");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     fn file_bytes(path: &Path) -> Vec<u8> {

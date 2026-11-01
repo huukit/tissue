@@ -551,10 +551,35 @@ fn sync_cmd(repo: &Path, id: &str, summary: &str, actor_id: &str) -> Result<(), 
     check_issue_id(id)?;
     let core = core_for(repo)?;
     let actor = actor_from(actor_id);
-    let commit = core
-        .sync(id, &actor, &now_utc(), summary)
+    // #137: when an `agent:` block is configured, sync also invokes the
+    // agent and records the outcome; without it, record-only (unchanged).
+    let (commit, agent) = core
+        .sync_and_run_agent(id, &actor, &now_utc(), summary)
         .map_err(|e| format!("sync: {e}"))?;
     println!("synced {id} ({commit})");
+    match agent {
+        None => {
+            println!("no agent configured — sync recorded the change note only");
+        }
+        Some(outcome) if outcome.success() => {
+            println!(
+                "agent run ok ({} ms) — outcome recorded",
+                outcome.duration_ms
+            );
+        }
+        Some(outcome) if outcome.timed_out => {
+            println!(
+                "agent run timed out after {} ms — recorded as a sync failure note",
+                outcome.duration_ms
+            );
+        }
+        Some(outcome) => {
+            println!(
+                "agent run failed: exit {:?} ({} ms) — recorded as a sync failure note",
+                outcome.exit_code, outcome.duration_ms
+            );
+        }
+    }
     Ok(())
 }
 

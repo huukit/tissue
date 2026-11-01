@@ -91,10 +91,16 @@ An agent's proposed human-format edit. Requirements:
 ```
 Human decisions. Approval applies the proposal to the human format and clears `needs-review`. Rejection records the reason — rejections are data the agent learns from; agents must not blindly re-propose the same change (STATE.md, core loop rule 4).
 
+### `agent-run` (#137)
+```json
+{ "type": "agent-run", "data": { "issue": "IAM-42", "command": "claude -p sync IAM-42", "exit_code": 0, "timed_out": false, "duration_ms": 812, "stderr_tail": "..." } }
+```
+Written by the core only, after a `human-sync` when an `agent:` block is configured: the outcome of one spawned agent process (exit code `null` on timeout). A non-zero exit or timeout is data, not an error — the sync itself already succeeded.
+
 ## Invariants (enforced by `tissue-core`)
 
 1. Append-only: records are never modified or reordered; `seq` monotonic and gap-free.
 2. Every line parses; a malformed append aborts the whole operation atomically (no partial writes).
 3. Proposal lifecycle is a state machine: `proposed → approved | rejected`; any other transition is rejected at write time.
-4. Only the core writes `human-sync`, `approval`, `rejection` records; agents write `plan`, `observation`, `attempt`, `result`, `blocker`, `proposal`.
+4. Only the core writes `human-sync`, `approval`, `rejection`, `agent-run` records; agents write `plan`, `observation`, `attempt`, `result`, `blocker`, `proposal`.
 5. Volume is unbounded by design — human-facing surfaces summarize; they never dump this file.

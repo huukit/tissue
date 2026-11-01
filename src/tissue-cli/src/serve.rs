@@ -159,6 +159,10 @@ fn api_route(
     if method == "POST" {
         return api_write_route(stream, rest, repo, headers, body);
     }
+    // #137: PUT is the config-update verb (whitelisted keys only).
+    if method == "PUT" {
+        return api_put_route(stream, rest, repo, headers, body);
+    }
     // Reads: GET only, loopback-only, tokenless. A GET on a write-only
     // subroute (records/propose) tells the caller to POST with a token.
     if let Some(t) = rest.strip_prefix("issues/") {
@@ -200,6 +204,10 @@ fn api_route(
     if rest == "projects" {
         return api_projects(stream, repo);
     }
+    // #137: whitelisted, secret-free config view (api_token never returned).
+    if rest == "config" {
+        return api_config_get(stream, repo);
+    }
     if rest == "releases" {
         return api_releases(stream, repo);
     }
@@ -236,6 +244,101 @@ fn api_projects(stream: &mut TcpStream, repo: &Path) -> Result<(), String> {
             items.join(",")
         ),
     )
+}
+
+/// GET /api/config (#137): the whitelisted view of `.tissue/config.yml` —
+/// tokenless read like every GET. `api_token` is never included.
+fn api_config_get(stream: &mut TcpStream, repo: &Path) -> Result<(), String> {
+    match tissue_core::config::whitelisted_view(repo) {
+        Ok(view) => {
+            let body = serde_json::to_string(&view).unwrap_or_else(|_| "{}".into());
+            respond_json(stream, 200, &body)
+        }
+        Err(e) => respond_json(stream, 400, &format!("{{\"error\":{}}}", json_str(&e))),
+    }
+}
+
+/// PUT /api/config (#137): update whitelisted top-level keys of
+/// `.tissue/config.yml` — token-protected, one commit per change.
+/// `api_token` and any non-whitelisted key are rejected (400) before
+/// anything is written.
+fn api_put_route(
+    stream: &mut TcpStream,
+    rest: &str,
+    repo: &Path,
+    headers: &str,
+    body: &[u8],
+) -> Result<(), String> {
+    if rest != "config" {
+        return respond_json(stream, 404, "{\"error\":\"unknown api route\"}");
+    }
+    let Some(token) = api_token(repo) else {
+        return respond_json(
+            stream,
+            503,
+            "{\"error\":\"write API disabled: no api_token in .tissue/config.yml\"}",
+        );
+    };
+    match bearer_token(headers) {
+        Some(provided) if token_matches(&token, &provided) => {}
+        Some(_) => {
+            return respond_json(stream, 401, "{\"error\":\"invalid or expired token\"}");
+        }
+        None => {
+            return respond_json(
+                stream,
+                401,
+                "{\"error\":\"missing Authorization: Bearer <token> header\"}",
+            );
+        }
+    }
+    let payload = match std::str::from_utf8(body) {
+        Ok(s) => s,
+        Err(_) => {
+            return respond_json(
+                stream,
+                400,
+                "{\"error\":\"request body must be UTF-8 JSON\"}",
+            )
+        }
+    };
+    let v = match parse_json_body(payload) {
+        Ok(v) => v,
+        Err(_) => {
+            return respond_json(
+                stream,
+                400,
+                "{\"error\":\"request body must be a JSON object of top-level config keys\"}",
+            )
+        }
+    };
+    let Some(obj) = v.as_object() else {
+        return respond_json(
+            stream,
+            400,
+            "{\"error\":\"request body must be a JSON object of top-level config keys\"}",
+        );
+    };
+    let mut updates = std::collections::BTreeMap::new();
+    for (k, val) in obj {
+        if k == "actor" {
+            continue; // metadata, not a config key
+        }
+        updates.insert(k.clone(), val.clone());
+    }
+    let actor_id = obj
+        .get("actor")
+        .and_then(|a| a.as_str())
+        .unwrap_or("human:gui");
+    let grepo = tissue_core::git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    let author = tissue_core::git::Author {
+        name: actor_id.to_string(),
+        email: format!("{actor_id}@tissue.local"),
+    };
+    match tissue_core::config::apply_whitelisted_update(&grepo, &updates, &author) {
+        Ok(()) => respond_json(stream, 200, "{\"updated\":true}"),
+        Err(e) => respond_json(stream, 400, &format!("{{\"error\":{}}}", json_str(&e))),
+    }
 }
 
 /// POST /api/projects {"name": "...", "prefix": "...", "actor"?} —
@@ -643,7 +746,28 @@ fn api_write_sync(
     };
     let actor_id = json_field(&v, "actor").unwrap_or("human:gui");
     match crate::api_write::sync(repo, id, summary, actor_id) {
-        Ok(()) => respond_json(stream, 201, "{\"synced\":true}"),
+        Ok(agent_outcome) => {
+            // #137: surface the agent run outcome (if configured) so the
+            // GUI can show success / failure / timeout on the Sync button.
+            let agent_json = match &agent_outcome {
+                None => "null".to_string(),
+                Some(o) => format!(
+                    "{{\"exit_code\":{},\"timed_out\":{},\"duration_ms\":{},\"success\":{}}}",
+                    match o.exit_code {
+                        Some(c) => c.to_string(),
+                        None => "null".to_string(),
+                    },
+                    o.timed_out,
+                    o.duration_ms,
+                    o.success()
+                ),
+            };
+            respond_json(
+                stream,
+                201,
+                &format!("{{\"synced\":true,\"agent_run\":{agent_json}}}"),
+            )
+        }
         Err(e) if e.contains("nothing to sync") => {
             // #136: not an error — the human format simply has no changes
             // since the last sync baseline. No record, no commit.

@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
+use crate::config::{self, AgentRunOutcome};
 use crate::git::{Author, Repo};
 use crate::human::{self, IssueFile, IssueStatus, NEEDS_REVIEW};
 use crate::state::{Decision, IllegalTransition, ProposalState};
@@ -438,6 +439,83 @@ impl Core {
         Ok(self
             .repo
             .commit_all(&actor.author, &format!("sync {issue_id}: {summary}"))?)
+    }
+
+    /// #137: sync, then invoke the configured agent (if any) and record
+    /// the outcome. With no `agent:` block this is exactly `sync` —
+    /// record-only, backwards compatible. With an agent configured:
+    /// human-sync record + commit, spawn `agent.command args…` with the
+    /// JSON envelope on stdin (cwd = issue repo, env scrubbed, token never
+    /// in argv/env), then an `agent-run` record + commit with the outcome
+    /// (exit code, timeout, duration). A failing/hanging agent never
+    /// fails the sync itself — it is recorded as data.
+    ///
+    /// Returns `(sync_commit, Option<agent_outcome>)`.
+    pub fn sync_and_run_agent(
+        &self,
+        issue_id: &str,
+        actor: &Actor,
+        now: &str,
+        summary: &str,
+    ) -> Result<(String, Option<AgentRunOutcome>)> {
+        let commit = self.sync(issue_id, actor, now, summary)?;
+        let agent = config::agent_config(self.repo.root()).map_err(Error::Io)?;
+        let Some(agent) = agent else {
+            return Ok((commit, None));
+        };
+        let records = self.read_stream(issue_id)?;
+        let revision = fs::read_to_string(self.issue_path(issue_id)?)
+            .ok()
+            .and_then(|t| IssueFile::parse(&t).ok())
+            .map(|i| i.revision)
+            .unwrap_or(0);
+        let envelope = json!({
+            "issue": issue_id,
+            "revision": revision,
+            "summary": summary,
+            "changes": records
+                .last()
+                .and_then(|r| r.get("data"))
+                .and_then(|d| d.get("changes"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+            "stream_tail": records.iter().rev().take(10).cloned().collect::<Vec<_>>(),
+        });
+        let outcome =
+            config::run_agent(self.repo.root(), &agent, issue_id, &envelope).map_err(Error::Io)?;
+        self.append_record(
+            issue_id,
+            json!({
+                "type": "agent-run",
+                "ts": now,
+                "actor": "tissue-core",
+                "refs": [],
+                "data": {
+                    "issue": issue_id,
+                    "command": agent.argv(issue_id).join(" "),
+                    "exit_code": outcome.exit_code,
+                    "timed_out": outcome.timed_out,
+                    "duration_ms": outcome.duration_ms,
+                    "stderr_tail": outcome.stderr_tail,
+                }
+            }),
+        )?;
+        self.repo
+            .commit_all(
+                &actor.author,
+                &format!(
+                    "agent run {issue_id}: {}",
+                    if outcome.success() {
+                        format!("ok ({} ms)", outcome.duration_ms)
+                    } else if outcome.timed_out {
+                        format!("timeout after {} ms", outcome.duration_ms)
+                    } else {
+                        format!("exit {:?} ({} ms)", outcome.exit_code, outcome.duration_ms)
+                    }
+                ),
+            )
+            .map_err(Error::Git)?;
+        Ok((commit, Some(outcome)))
     }
 
     /// The issue as of the last sync baseline. The last `human-sync`

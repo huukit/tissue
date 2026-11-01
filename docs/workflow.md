@@ -53,6 +53,14 @@ working stream from that data onward — they never have to diff your file
 to discover your intent. If nothing changed since the last sync, tissue
 says `nothing to sync` and makes no record and no commit.
 
+If an `agent:` block is configured in `.tissue/config.yml` (Settings page
+in the GUI), sync then **runs that agent command** with a JSON envelope
+(`{issue, revision, changes, stream_tail}`) on stdin and the issue repo
+as its working directory. The agent's own records land through the API/CLI
+as usual, and tissue appends an `agent-run` record with the outcome (exit
+code, timeout, duration) — a failing or hanging agent is recorded, never
+fatal. Without an `agent:` block, sync is record-only.
+
 **AI → human: propose → tag → approve/reject.**
 An agent never edits `issue.md`. It proposes:
 
@@ -83,10 +91,13 @@ refused as stale.
 3. Edit `issue.md` as needed, then `tissue sync IAM-42 --summary ...`.
 4. `tissue serve` for the GUI: triage the needs-review queue, read
    proposals with before/after context, approve or reject them in the
-   browser, edit front matter (conflict-safe), sync your edits, and
+   browser, edit front matter (conflict-safe), sync your edits (which
+   also runs the configured agent, see above), and
    create issues and projects right from the list view ("+ New issue",
    "+ New project") — every GUI action lands as the same git commit as
-   its CLI twin.
+   its CLI twin. The **Settings** view shows and edits the non-secret
+   config (`agent:` block, `remote`) via the token-protected config API;
+   the API token itself is never displayed there.
 
 **Agent:**
 1. Read `issue.md` and `agent.jsonl` for full context.
