@@ -17,6 +17,12 @@ Grab the archive for your platform from the
 
 (replace `<version>` with the release tag you are downloading, e.g. `v0.1.4`)
 
+Use the latest **published** release. Tags are published automatically by the
+release workflow, so the newest tag on the releases page is normally the right
+pick — but draft releases are hidden from `releases/latest` and from the page
+for non-collaborators, so if the newest tag ever appears as a draft, choose the
+latest published one instead and match its `.sha256` sidecar.
+
 Verify the download against the published `.sha256` sidecar:
 
 ```sh

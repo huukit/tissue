@@ -4,7 +4,11 @@ One binary, one box, zero infrastructure. `tissue serve` runs as a systemd
 service bound to loopback (127.0.0.1) — remote access stays **SSH-tunnel-only**
 (the viewer is read-only; the tunnel preserves the loopback-only model).
 A systemd timer polls the GitHub Releases for a new tag, sha256-verifies the
-download, and swaps the binary with one rollback copy.
+download, and swaps the binary with one rollback copy. It follows
+`releases/latest`, which is the latest **published** (non-draft) release —
+releases are published automatically when their tag is pushed; if a tag ever
+lingers as a draft it is skipped, so upgrades always track a published
+release.
 
 This is the only document you need for one-time setup.
 
@@ -36,15 +40,20 @@ This is the only document you need for one-time setup.
    - `TISSUE_BIN` — binary path (default `/usr/local/bin/tissue`)
    - `TISSUE_PORT` — viewer port (default `7323`)
 
-3. **Install the current binary** once so the service can start:
+3. **Install the current binary** once so the service can start. Resolve the
+   exact versioned asset name from the latest published release first (the
+   archive names carry the version, e.g. `tissue-v0.1.4-x86_64-unknown-linux-musl.tar.gz`):
 
    ```sh
-   curl -fsSL -o /tmp/tissue.tar.gz \
-     https://github.com/huukit/tissue/releases/latest/download/tissue-v<version>-x86_64-unknown-linux-musl.tar.gz
-   curl -fsSL -o /tmp/tissue.tar.gz.sha256 \
-     https://github.com/huukit/tissue/releases/latest/download/tissue-v<version>-x86_64-unknown-linux-musl.tar.gz.sha256
-   cd /tmp && sha256sum -c tissue.tar.gz.sha256
-   tar xzf tissue.tar.gz && install -m 0755 tissue /usr/local/bin/tissue
+   asset="$(curl -fsSL https://api.github.com/repos/huukit/tissue/releases/latest \
+     | grep -m1 '"name": "tissue-v.*x86_64-unknown-linux-musl.tar.gz"$' \
+     | sed -E 's/.*"name": "([^"]+)".*/\1/')"
+   curl -fsSL -o "/tmp/$asset" \
+     "https://github.com/huukit/tissue/releases/latest/download/$asset"
+   curl -fsSL -o "/tmp/$asset.sha256" \
+     "https://github.com/huukit/tissue/releases/latest/download/$asset.sha256"
+   cd /tmp && sha256sum -c "$asset.sha256"
+   tar xzf "$asset" && install -m 0755 tissue /usr/local/bin/tissue
    ```
 
 4. **Enable**:

@@ -68,7 +68,9 @@ Two commands and a browser. The release binary is fully static (musl); no Rust
 toolchain, no node, no server dependencies.
 
 1. **Get the binary** — download the build for your platform from the
-   [releases page](https://github.com/huukit/tissue/releases): static
+   [releases page](https://github.com/huukit/tissue/releases) — always the
+   latest **published** release (tags are published automatically; skip any
+   tag still marked draft): static
    Linux x86_64 (`*-unknown-linux-musl`), Windows x86_64
    (`*-pc-windows-msvc`), or macOS aarch64 (`*-aarch64-apple-darwin`).
    Each artifact has a `.sha256` sidecar. Or build from source:
