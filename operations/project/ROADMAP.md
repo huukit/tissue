@@ -14,46 +14,35 @@ Principle: **simple before featured.** Every stage must work end-to-end before t
 ## Done — PoC core ✓
 
 - `tissue-core` + CLI: full loop (init/create/list/show/sync/propose/approve/reject) (#5, #6)
-- Read-only `serve` GUI viewer (#30), releases spec'd (#2), releases impl shipped as git tags (#6, decision 6)
-- Release pipeline: tag → 3-platform binaries → draft release (#43–#47, #52)
-- User docs (#63), container image (#36/#38)
-- v0.1.1 published; owner-verified on remote/tunnel deployment
+- `serve` GUI viewer (#30) grown into the full review surface in 4 stages: shell + project switcher (#96), releases view (#97), needs-review queue + approve/reject + agent timeline (#98), human editing + sync with revision-guard conflicts (#99)
+- Releases first-class: `release create/list/show/assign/cut` over `.tissue/releases/<ver>/` (#81), tag-triggered 3-platform binary pipeline (#43–#47, #52)
+- REST API on `serve`: agent write path (append/propose) with token auth (#80); GUI is a real API client
+- Hardening: revision guard on human-format mutations (#78), edge-path tests (#66/#69/#68), deterministic e2e (#72/#73), docs surface (#74), manual pass on release binaries (#65)
+- Multi-project: prefix-based grouping, `--project` filters on list/serve, GUI project switcher (#79)
+- Multi-machine issue repos: `tissue pull` (rebase-only) / `tissue push` (FF-only, force-with-lease after rebase) (#110)
+- Canonical agent-stream record shape (#106); user docs (#63); container image (#36/#38); deploy tooling with auto-upgrade (#83)
+- v0.1.1 → v0.1.3 published; owner-verified on the remote/tunnel deployment
 
-## Now — Hardening (#65–#74 wave)
+## Now — v0.1.4 gate and release-quality fixes
 
 Trust before features. The tracker must be boring-correct before anyone depends on it.
 
-- Concurrency correctness: last-writer-wins must die; explicit conflict detection on every human-format mutation (#78)
-- Edge-path tests: corrupt files, bad IDs, missing repos/issues (#66/#69, #68)
-- Deterministic e2e (no flaky harness) (#72/#73), complete CLI/docs surface (#74)
-- Manual test pass on the release binary (#65); dogfood trial alongside GitHub (#67)
+- Release gate: versioned artifact names (#115/#116) + docs refresh (#114/#117) — Tester-verified, then tag v0.1.4
+- **#118**: API record-append 400s on any synced issue (writer/reader schema disagreement, #106 class) — found in the v0.1.3 manual pass; fix before the next release
+- Owner verification on the deployment machine (follow-up to #65): the system must be fully working and owner-verified there **before** any dogfood switch
 
-## Next — Multi-project (small)
+## Next — deployment-UX gaps (small, from the owner's v0.1.3 test)
 
-One binary, many projects — without changing the single-project data model.
+- `tissue project add/list/remove` — manage the multi-project config without hand-editing `config.yml` (#119)
+- `serve` warns at startup when no API token is configured, instead of silent 401s on writes (#120)
 
-- Project-level commands inside one issue repo: a project is a named grouping of issue IDs (ID prefixes already carry this naturally); `--project` filter on list/serve views (#79)
-- Cross-project queries: `tissue list --all-projects`, aggregated serve view
-- Keep the standalone-issue-repo principle (decision 2): multiple projects per repo, never code-repo-inline storage
+## Later — PoC dogfood switch (#3)
 
-## Later — REST API (agents' remote surface) (#80)
-
-The API is the agent interface for remote work; the CLI already proved the model.
-
-- Write path via propose/approve only — API never writes the human format directly (decision 4)
-- Token auth per issue repo (decision 5, spec'd in STATE.md)
-- GUI becomes a real API client; sync button gets its home
-
-## Later — Releases implementation (#81)
-
-Spec exists (decision 6, SPEC-human-format.md); PoC ships tags + release workflow.
-
-- `release create/list/show/assign/cut` commands over `.tissue/releases/<ver>/`
-- Issue→release link as front-matter field; per-release derived lists
+Manage tissue's own issues in tissue. Explicitly gated by the owner: not before the system is verified working on the deployment machine. Prerequisites (pull/push, import tooling, GUI review surface) are in place.
 
 ## Explicitly not now
 
-- Multi-user identity/permissions (actor strings suffice until proven otherwise)
+- Multi-user identity/permissions, OAuth2 — deferred per decision 10 (#85): git-actor identity + per-repo static tokens until a real team requirement exists
 - Remotes/auth infrastructure beyond a plain git remote
 - Derived indexes, search
 - Webhooks, notifications, integrations

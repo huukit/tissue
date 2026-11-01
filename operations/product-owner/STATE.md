@@ -38,6 +38,7 @@ Tissue is a place where humans and AI build things together, without drowning ea
 | 7 | **Implementation language: Rust.** Core, CLI, and API in one Rust workspace; GUI in TypeScript as a pure API client. |
 | 8 | **License: GPL-3.0-only.** Copyleft (#51). The full license text is `LICENSE` at the repo root; the Cargo workspace declares `GPL-3.0-only`. |
 | 9 | **CI on GitHub-hosted runners.** Standard `ubuntu-latest`/`windows-latest`/`macos-latest` labels — free and unlimited for public repos. The self-hosted runner interlude (#47) was reverted once this was confirmed (#52). |
+| 10 | **Identity and auth (#85, owner-signed 2026-11-01): git-actor identity + per-repo static tokens, no OAuth2.** Actor identity is the git actor on each mutation commit — `git log` is the user-management record, no user database. Transport auth for the API/GUI write path is the per-repo static token model (#80): one token for the human, one per agent. OAuth2 is deferred until both a real multi-user team requirement and serve exposure beyond loopback+tunnel exist; if identity *verification* is ever needed, ssh-signed commits are the upgrade path. |
 
 ## Implementation direction
 
