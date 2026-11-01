@@ -181,6 +181,7 @@ record level; this covers the history level.
 ## Next
 
 - [Workflow](workflow.md) — the dual-format model and the daily loop
+- [Agent workflow](agent-workflow.md) — operating the repo as an agent via CLI only
 - [CLI reference](cli-reference.md) — every command and flag
 - [Container guide](container.md) — run the viewer in Docker
 - [Automated deployment](../deploy/README.md) — systemd service + auto-upgrade for a testing machine

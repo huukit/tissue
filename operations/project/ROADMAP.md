@@ -70,7 +70,7 @@ Trust & auth (dogfood gate):
 Manage tissue's own issues in tissue. Gates: #140 green + #159 + #149. Prep may proceed on branches now (merge after the gates):
 
 - **#162** import hardening + full dry-run import of huukit/tissue into a scratch repo
-- **#163** DOGFOOD-RUNBOOK.md (cutover day procedure, rollback, two-week keep/kill criteria) + agent CLI workflow doc
+- **#163** [DOGFOOD-RUNBOOK.md](DOGFOOD-RUNBOOK.md) (cutover day procedure, rollback, two-week keep/kill criteria) + [docs/agent-workflow.md](../../docs/agent-workflow.md) (agent CLI-only workflow: actor conventions, four-case contract, token use, sync/agent hook)
 
 ## Explicitly not now
 

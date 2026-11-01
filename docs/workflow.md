@@ -134,3 +134,5 @@ stream and the commit).
 
 - [Getting started](getting-started.md) — install and first run
 - [CLI reference](cli-reference.md) — every command, flag, and API endpoint
+- [CLI reference](cli-reference.md) — every command and flag
+- [Agent workflow](agent-workflow.md) — how an agent operates via CLI only (#3 dogfood)
