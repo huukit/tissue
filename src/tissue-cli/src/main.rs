@@ -180,6 +180,34 @@ enum Commands {
         #[command(subcommand)]
         command: ReleaseCommands,
     },
+    /// Project subcommands: add / list / remove (#119).
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProjectCommands {
+    /// List the configured projects (name -> issue-id prefix).
+    List,
+    /// Add (or overwrite) a project mapping. Refuses a prefix already
+    /// mapped to a different name. Commits the config change.
+    Add {
+        /// Project name (a valid config key: no whitespace or colon).
+        name: String,
+        /// Issue-id prefix for the project, e.g. `IAM`.
+        prefix: String,
+    },
+    /// Remove a project mapping. Refuses while issues with that prefix
+    /// exist, unless `--force`. Commits the config change.
+    Remove {
+        /// Project name to remove.
+        name: String,
+        /// Remove even if issues with the project's prefix exist.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -345,7 +373,242 @@ fn run(cli: Cli) -> Result<(), String> {
         Commands::Pull {} => pull_cmd(&repo),
         Commands::Push { force_with_lease } => push_cmd(&repo, force_with_lease),
         Commands::Release { command } => release_cmd(&repo, command),
+        Commands::Project { command } => project_cmd(&repo, command),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Projects (#119): manage the name -> prefix mapping in config.yml
+// ---------------------------------------------------------------------------
+
+/// Parse the `projects:` mapping from config.yml, preserving entry order.
+fn read_projects(repo: &Path) -> Result<Vec<(String, String)>, String> {
+    let config = std::fs::read_to_string(tissue_dir(repo).join("config.yml")).map_err(|e| {
+        format!(
+            "reading {}: {e}",
+            tissue_dir(repo).join("config.yml").display()
+        )
+    })?;
+    let mut projects = Vec::new();
+    let mut in_projects = false;
+    for line in config.lines() {
+        if line.starts_with("projects:") {
+            in_projects = true;
+            continue;
+        }
+        if in_projects {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with('#') || trimmed.is_empty() {
+                continue;
+            }
+            if !line.starts_with(' ') {
+                break;
+            }
+            if let Some((name, prefix)) = trimmed.split_once(':') {
+                let prefix = prefix.trim().trim_matches('"');
+                if !prefix.is_empty() {
+                    projects.push((name.trim().to_string(), prefix.to_string()));
+                }
+            }
+        }
+    }
+    Ok(projects)
+}
+
+/// Write the `projects:` mapping back, preserving everything outside the
+/// block. The default `project:` line is untouched.
+fn write_projects(repo: &Path, projects: &[(String, String)]) -> Result<(), String> {
+    let path = tissue_dir(repo).join("config.yml");
+    let config =
+        std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let mut out = String::new();
+    let mut in_projects = false;
+    let mut wrote_block = false;
+    for line in config.lines() {
+        if line.starts_with("projects:") {
+            out.push_str("projects:\n");
+            for (name, prefix) in projects {
+                out.push_str(&format!("  {name}: {prefix}\n"));
+            }
+            in_projects = true;
+            wrote_block = true;
+            continue;
+        }
+        if in_projects {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with('#') || trimmed.is_empty() {
+                // Comments/blank lines inside the old block are dropped;
+                // the block is regenerated from the mapping.
+                continue;
+            }
+            if line.starts_with(' ') {
+                continue;
+            }
+            in_projects = false;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !wrote_block {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str("projects:\n");
+        for (name, prefix) in projects {
+            out.push_str(&format!("  {name}: {prefix}\n"));
+        }
+    }
+    std::fs::write(&path, out).map_err(|e| format!("writing {}: {e}", path.display()))
+}
+
+/// A project name must be a valid config key: no whitespace or colon.
+fn valid_project_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// A prefix must match the issue-id charset enforced by `create`:
+/// uppercase ASCII letters only (the `[A-Z]+` part of `[A-Z]+-<number>`).
+fn valid_project_prefix(prefix: &str) -> bool {
+    !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_uppercase())
+}
+
+fn default_project(repo: &Path) -> Result<String, String> {
+    let config = std::fs::read_to_string(tissue_dir(repo).join("config.yml"))
+        .map_err(|e| format!("reading config.yml: {e}"))?;
+    for line in config.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("project:") {
+            let name = rest.trim().trim_matches('"');
+            if !name.is_empty() {
+                return Ok(name.to_string());
+            }
+        }
+    }
+    Ok(String::new())
+}
+
+fn issues_with_prefix(repo: &Path, prefix: &str) -> Result<Vec<String>, String> {
+    let mut found = Vec::new();
+    let dir = issues_dir(repo);
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(found),
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if let Some(rest) = name.strip_prefix(&format!("{prefix}-")) {
+            if rest.chars().all(|c| c.is_ascii_digit()) && !rest.is_empty() {
+                found.push(name.to_string());
+            }
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+fn project_cmd(repo: &Path, command: ProjectCommands) -> Result<(), String> {
+    require_repo(repo)?;
+    match command {
+        ProjectCommands::List => {
+            let projects = read_projects(repo)?;
+            let default = default_project(repo)?;
+            if projects.is_empty() {
+                println!("no projects configured");
+                return Ok(());
+            }
+            for (name, prefix) in &projects {
+                let marker = if *name == default { " (default)" } else { "" };
+                println!("{name}\t{prefix}{marker}");
+            }
+            Ok(())
+        }
+        ProjectCommands::Add { name, prefix } => {
+            if !valid_project_name(&name) {
+                return Err(format!(
+                    "invalid project name `{name}`: use letters, digits, `-` or `_`"
+                ));
+            }
+            if !valid_project_prefix(&prefix) {
+                return Err(format!(
+                    "invalid prefix `{prefix}`: must be uppercase ASCII letters (e.g. IAM)"
+                ));
+            }
+            let projects = read_projects(repo)?;
+            if let Some((_, existing)) = projects.iter().find(|(n, _)| n == &name) {
+                if existing != &prefix {
+                    return Err(format!(
+                        "project `{name}` already maps to prefix {existing}; remove it first or add with the same name to overwrite"
+                    ));
+                }
+            }
+            if let Some((other, _)) = projects.iter().find(|(n, p)| p == &prefix && n != &name) {
+                return Err(format!(
+                    "prefix {prefix} is already mapped to project `{other}`"
+                ));
+            }
+            let existed = projects.iter().any(|(n, _)| n == &name);
+            write_projects(repo, &{
+                let mut p = projects.clone();
+                p.retain(|(n, _)| n != &name);
+                p.push((name.clone(), prefix.clone()));
+                p
+            })?;
+            commit_config(
+                repo,
+                &format!(
+                    "project add: {name} -> {prefix}{}",
+                    if existed { " (overwritten)" } else { "" }
+                ),
+            )?;
+            println!("added project {name} -> {prefix}");
+            Ok(())
+        }
+        ProjectCommands::Remove { name, force } => {
+            let projects = read_projects(repo)?;
+            let prefix = projects
+                .iter()
+                .find(|(n, _)| n == &name)
+                .map(|(_, p)| p.clone())
+                .ok_or_else(|| format!("unknown project `{name}`: no mapping in config.yml"))?;
+            let existing = issues_with_prefix(repo, &prefix)?;
+            if !existing.is_empty() && !force {
+                return Err(format!(
+                    "project `{name}` has {} issue(s) with prefix {prefix} (e.g. {}); use --force to remove the mapping anyway",
+                    existing.len(),
+                    existing[0]
+                ));
+            }
+            if name == default_project(repo)? {
+                return Err(format!(
+                    "project `{name}` is the default project in config.yml; change `project:` first"
+                ));
+            }
+            write_projects(repo, &{
+                let mut p = projects.clone();
+                p.retain(|(n, _)| n != &name);
+                p
+            })?;
+            commit_config(repo, &format!("project remove: {name} ({prefix})"))?;
+            println!("removed project {name} (prefix {prefix})");
+            Ok(())
+        }
+    }
+}
+
+fn commit_config(repo: &Path, message: &str) -> Result<(), String> {
+    let grepo = git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    let author = git::Author {
+        name: "tissue".to_string(),
+        email: "tissue@localhost".to_string(),
+    };
+    grepo
+        .commit_all(&author, message)
+        .map_err(|e| format!("committing config: {e}"))?;
+    Ok(())
 }
 
 fn release_cmd(repo: &Path, command: ReleaseCommands) -> Result<(), String> {

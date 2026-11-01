@@ -109,6 +109,84 @@ fn proposal_id_from(out: &Output) -> String {
         .to_string()
 }
 
+/// #119: `tissue project add/list/remove` — manage the multi-project
+/// mapping without hand-editing config.yml. Every mutation is one commit;
+/// list/serve project filters work immediately after add.
+#[test]
+fn project_add_list_remove_e2e() {
+    let repo = Repo::new("project");
+    init(&repo);
+
+    // list: the init project is there, marked default
+    let out = repo.tissue(&["project", "list"]);
+    Repo::assert_success(&out, "project list");
+    let list = Repo::stdout(&out);
+    let config = std::fs::read_to_string(repo.root.join(".tissue/config.yml")).unwrap();
+    let default_name = config
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("project:"))
+        .map(|v| v.trim().to_string())
+        .expect("default project in config");
+    assert!(
+        list.contains(&format!("{default_name}\tIAM (default)")),
+        "default listed: {list}"
+    );
+
+    // add: one commit, mapping written
+    let before = repo.commit_count();
+    let out = repo.tissue(&["project", "add", "second", "VER"]);
+    Repo::assert_success(&out, "project add");
+    assert_eq!(repo.commit_count(), before + 1, "add = one commit");
+    let config = std::fs::read_to_string(repo.root.join(".tissue/config.yml")).unwrap();
+    assert!(config.contains("second: VER"), "mapping written: {config}");
+
+    // AC2: list --project and serve --project resolve immediately
+    create(&repo, "VER-1", "Second project issue");
+    let out = repo.tissue(&["list", "--project", "second"]);
+    Repo::assert_success(&out, "list --project second");
+    let list = Repo::stdout(&out);
+    assert!(list.contains("VER-1"), "new project issue listed: {list}");
+    let out = repo.tissue(&["project", "list"]);
+    let list = Repo::stdout(&out);
+    assert!(list.contains("second\tVER"), "second listed: {list}");
+
+    // AC3: duplicate prefix under a different name is refused
+    let out = repo.tissue(&["project", "add", "other", "VER"]);
+    Repo::assert_failure(&out, "duplicate prefix");
+    assert!(
+        Repo::stderr(&out).contains("already mapped"),
+        "duplicate prefix error: {}",
+        Repo::stderr(&out)
+    );
+    // AC3: invalid prefix and name are refused
+    let out = repo.tissue(&["project", "add", "bad", "ver"]);
+    Repo::assert_failure(&out, "lowercase prefix");
+    let out = repo.tissue(&["project", "add", "has space", "VER"]);
+    Repo::assert_failure(&out, "invalid name");
+    // unknown name on remove
+    let out = repo.tissue(&["project", "remove", "nope"]);
+    Repo::assert_failure(&out, "unknown remove");
+    assert!(
+        Repo::stderr(&out).contains("unknown project"),
+        "unknown remove error: {}",
+        Repo::stderr(&out)
+    );
+
+    // remove: refused while issues exist, --force removes (one commit)
+    let before = repo.commit_count();
+    let out = repo.tissue(&["project", "remove", "second"]);
+    Repo::assert_failure(&out, "remove with issues");
+    assert_eq!(repo.commit_count(), before, "refused remove = no commit");
+    let out = repo.tissue(&["project", "remove", "second", "--force"]);
+    Repo::assert_success(&out, "remove --force");
+    assert_eq!(repo.commit_count(), before + 1, "remove = one commit");
+    let config = std::fs::read_to_string(repo.root.join(".tissue/config.yml")).unwrap();
+    assert!(!config.contains("second:"), "mapping removed: {config}");
+    // the default project cannot be removed
+    let out = repo.tissue(&["project", "remove", &default_name]);
+    Repo::assert_failure(&out, "remove default");
+}
+
 #[test]
 fn version_reports_workspace_version() {
     let repo = Repo::new("version");

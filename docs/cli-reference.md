@@ -132,6 +132,21 @@ that prefix; `tissue list --all` lists everything. The default project name
 from `init --project <NAME>` doubles as the first key. No schema change: an
 issue's project is simply its id prefix.
 
+Manage the mapping with `tissue project` (no hand-editing):
+
+```sh
+tissue project list                # name -> prefix, default marked
+tissue project add second VER      # add (or overwrite) a mapping
+tissue project remove second       # refuse while issues with VER- exist
+tissue project remove second --force
+```
+
+Every `add`/`remove` is one git commit in the issue repo. `add` refuses a
+prefix already mapped to a different name; `remove` refuses while issues with
+the project's prefix exist (override with `--force`) and always refuses for
+the default `project:` entry. Prefixes are uppercase ASCII letters (the
+`[A-Z]+` of issue ids); project names are letters, digits, `-` or `_`.
+
 ---
 
 ## `tissue show <ID>`
