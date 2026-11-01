@@ -69,8 +69,11 @@ enum Commands {
     Create {
         /// Issue id, pattern `[A-Z]+-<number>` (e.g. `IAM-42`).
         id: String,
-        /// One-line issue title.
-        title: String,
+        /// One-line issue title (positional; or pass --title).
+        title: Option<String>,
+        /// Issue title as a flag — alias for the positional form (#145).
+        #[arg(long = "title", value_name = "TEXT")]
+        title_flag: Option<String>,
         /// Issue body text; created as-is instead of opening the editor.
         #[arg(long, value_name = "TEXT")]
         body: Option<String>,
@@ -335,7 +338,27 @@ fn run(cli: Cli) -> Result<(), String> {
                 dry_run,
             },
         ),
-        Commands::Create { id, title, body } => create(&repo, &id, &title, body),
+        Commands::Create {
+            id,
+            title,
+            title_flag,
+            body,
+        } => {
+            // #145: accept both `tissue create <ID> <TITLE>` and
+            // `tissue create <ID> --title <TITLE>`; exactly one required.
+            let title = match (title, title_flag) {
+                (Some(t), None) | (None, Some(t)) => t,
+                (Some(_), Some(_)) => {
+                    return Err(
+                        "pass the title either positionally or with --title, not both".into(),
+                    )
+                }
+                (None, None) => {
+                    return Err("missing title: pass it positionally or with --title <TEXT>".into())
+                }
+            };
+            create(&repo, &id, &title, body)
+        }
         Commands::List {
             status,
             project,

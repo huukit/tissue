@@ -109,6 +109,30 @@ fn proposal_id_from(out: &Output) -> String {
         .to_string()
 }
 
+/// #145: `tissue create <ID> --title <TEXT>` equals the positional form;
+/// both/neither errors cleanly.
+#[test]
+fn create_accepts_title_flag() {
+    let repo = Repo::new("create-title");
+    init(&repo);
+    let out = repo.tissue(&["create", "IAM-1", "--title", "Flag title", "--body", "b"]);
+    Repo::assert_success(&out, "create --title");
+    let issue = repo.read_issue("IAM-1");
+    assert!(
+        issue.contains("title: Flag title"),
+        "title written: {issue}"
+    );
+    // positional form unchanged
+    let out = repo.tissue(&["create", "IAM-2", "Positional title", "--body", "b"]);
+    Repo::assert_success(&out, "create positional");
+    // both -> clear error
+    let out = repo.tissue(&["create", "IAM-3", "--title", "X", "Y"]);
+    Repo::assert_failure(&out, "both titles");
+    // neither -> clear error
+    let out = repo.tissue(&["create", "IAM-4"]);
+    Repo::assert_failure(&out, "no title");
+}
+
 /// #138: derived last-touch — human / synced / ai-proposal across the
 /// three transitions, visible in `tissue list`.
 #[test]

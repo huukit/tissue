@@ -45,13 +45,14 @@ the file changed on disk in between (e.g. another window or machine edited it).
 Nothing is auto-resolved or clobbered: re-read the issue and re-run the command.
 Older files without the field parse as revision 1.
 
-## `tissue create <ID> <TITLE>`
+## `tissue create <ID> <TITLE>` / `tissue create <ID> --title <TEXT>`
 
 Create a new issue. `ID` must match `[A-Z]+-<number>` (e.g. `IAM-42`).
+The title is positional or a `--title` flag — exactly one of the two.
 
 ```sh
 tissue create DOC-1 "Write user guide"
-tissue create DOC-2 "Proofread guide" --body "Body text, no editor."
+tissue create DOC-2 --title "Proofread guide" --body "Body text, no editor."
 ```
 
 Without `--body`, an editor (`$EDITOR`, default `vi`) opens with the
@@ -60,6 +61,7 @@ Commits: exactly one, `create <ID>: <TITLE>`.
 
 | Flag | Meaning |
 |---|---|
+| `--title <TEXT>` | The issue title (alternative to the positional form; exactly one required) |
 | `--body <TEXT>` | Issue body text; created as-is instead of opening the editor |
 
 ---
