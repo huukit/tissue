@@ -9,8 +9,11 @@ permissions:
   contents: read
 
 concurrency:
+  # PR runs may cancel each other; main pushes must never cancel the newest
+  # run — the head commit needs a recorded green run for release audits
+  # (#141: a rapid merge wave cancelled the final main run at 1s).
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 env:
   CARGO_TERM_COLOR: always

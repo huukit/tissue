@@ -23,22 +23,31 @@ Principle: **simple before featured.** Every stage must work end-to-end before t
 - Canonical agent-stream record shape (#106); user docs (#63); container image (#36/#38); deploy tooling with auto-upgrade (#83)
 - v0.1.1 → v0.1.3 published; owner-verified on the remote/tunnel deployment
 
-## Now — v0.1.4 gate and release-quality fixes
+## Done — v0.1.4 (2026-11-01) ✓
 
-Trust before features. The tracker must be boring-correct before anyone depends on it.
+Trust before features held: the v0.1.4 gate landed all of it FF on main (`5f550a3`→`efe4ec8`).
 
-- Release gate: versioned artifact names (#115/#116) + docs refresh (#114/#117) — Tester-verified, then tag v0.1.4
-- **#118**: API record-append 400s on any synced issue (writer/reader schema disagreement, #106 class) — found in the v0.1.3 manual pass; fix before the next release
-- Owner verification on the deployment machine (follow-up to #65): the system must be fully working and owner-verified there **before** any dogfood switch
+- Versioned artifact names + upgrade script resolves by asset list (#115/#116); releases publish directly, `draft: false` (#126); published-vs-draft rule documented (#127)
+- **#118** fixed: sync records carry `reconciliation`; strict open accepts legacy records (#123)
+- Docs refresh for the real GUI surface (#114/#117); stale "read-only viewer" tagline fixed (#133)
+- `tissue project add/list/remove` (#119), serve no-token startup warning (#120)
+- Deploy hardening from the owner's box: literal `ExecStart` (203/EXEC, #129), file-based release fetch (curl exit 23, #130), post-swap `--version` guard (#128), manual-install docs for versioned names
 
-## Next — deployment-UX gaps (small, from the owner's v0.1.3 test)
+## Now — v0.1.5: make the core loop real and usable from the GUI
 
-- `tissue project add/list/remove` — manage the multi-project config without hand-editing `config.yml` (#119)
-- `serve` warns at startup when no API token is configured, instead of silent 401s on writes (#120)
+Owner-verified on the deployment machine; next cut is about the sync button and visible state.
+
+- **#139** four-case contract: agents never write the human format (creation included) — agent `POST /api/issues` becomes propose+needs-review; human actors create directly
+- **#136** sync records the real field-level human-format diff since the last baseline; "nothing to sync" when clean; #118 regression test
+- **#138** derived per-issue `last_touch` state (`human` / `synced` / `ai-proposal`) in CLI list, API, GUI badges
+- **#137** settings page + `agent:` block in config.yml; sync invokes the configured agent, outcome recorded in stream
+- **#134** GUI "New issue" button (human actor) · **#135** GUI "New project" button + `POST/GET /api/projects` sharing validation with CLI #119
+- Deploy: **#131** startup troubleshooting docs, **#132** units as dedicated `tissue` user, **#128** close-out
+- Gate: dev PRs → Tester verify → PO merge FF → tag v0.1.5 → owner smoke pass (auto-upgrade chain, full GUI write loop incl. sync diff, conflict path, rollback, loopback check) → then #3 discussion
 
 ## Later — PoC dogfood switch (#3)
 
-Manage tissue's own issues in tissue. Explicitly gated by the owner: not before the system is verified working on the deployment machine. Prerequisites (pull/push, import tooling, GUI review surface) are in place.
+Manage tissue's own issues in tissue. Explicitly gated by the owner: not before the v0.1.5 smoke pass is green on the deployment machine. Prerequisites (pull/push, import tooling, GUI review surface) are in place.
 
 ## Explicitly not now
 
