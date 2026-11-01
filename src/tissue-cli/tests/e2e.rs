@@ -109,6 +109,50 @@ fn proposal_id_from(out: &Output) -> String {
         .to_string()
 }
 
+/// #138: derived last-touch — human / synced / ai-proposal across the
+/// three transitions, visible in `tissue list`.
+#[test]
+fn last_touch_transitions_e2e() {
+    let repo = Repo::new("last-touch");
+    init(&repo);
+
+    // Case 2: human creates — no stream — last touch is "human".
+    create(&repo, "IAM-1", "Fresh issue");
+    let list = Repo::stdout(&repo.tissue(&["list"]));
+    assert!(list.contains("[human]"), "human-created: {list}");
+
+    // Human syncs (establishes the baseline) -> "synced".
+    let out = repo.tissue(&["sync", "IAM-1", "--summary", "baseline"]);
+    Repo::assert_success(&out, "sync baseline");
+    let list = Repo::stdout(&repo.tissue(&["list"]));
+    assert!(list.contains("[synced]"), "after sync: {list}");
+
+    // Agent proposes -> "ai-proposal" (+ NEEDS REVIEW flag as today).
+    let out = repo.tissue(&[
+        "propose",
+        "IAM-1",
+        "--field",
+        "status",
+        "--current",
+        "open",
+        "--proposed",
+        "in-progress",
+        "--rationale",
+        "work started",
+    ]);
+    Repo::assert_success(&out, "propose");
+    let list = Repo::stdout(&repo.tissue(&["list"]));
+    assert!(list.contains("[ai-proposal]"), "pending proposal: {list}");
+    assert!(list.contains("NEEDS REVIEW"), "flag still shown: {list}");
+
+    // Human approves -> back to "human".
+    let out = repo.tissue(&["approve", "IAM-1", "prop-01"]);
+    Repo::assert_success(&out, "approve");
+    let list = Repo::stdout(&repo.tissue(&["list"]));
+    assert!(list.contains("[human]"), "after approval: {list}");
+    assert!(!list.contains("[synced]"), "no stale state: {list}");
+}
+
 /// #119: `tissue project add/list/remove` — manage the multi-project
 /// mapping without hand-editing config.yml. Every mutation is one commit;
 /// list/serve project filters work immediately after add.

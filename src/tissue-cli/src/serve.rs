@@ -713,7 +713,25 @@ fn api_issues(
     project_prefix: Option<&str>,
 ) -> Result<(), String> {
     let issues = scan_issues(repo, project_prefix);
-    let items: Vec<String> = issues.iter().map(issue_summary_json).collect();
+    let grepo = tissue_core::git::Repo::open(repo).ok();
+    let items: Vec<String> = issues
+        .iter()
+        .map(|i| {
+            let mut s = issue_summary_json(i);
+            s.pop(); // closing brace
+                     // #138: derived last-touch on the summary rows.
+            let lt = grepo
+                .as_ref()
+                .and_then(|g| {
+                    tissue_core::sync::Core::new(g.clone())
+                        .last_touch(&i.id)
+                        .ok()
+                })
+                .unwrap_or("human");
+            s.push_str(&format!(",\"last_touch\":{}}}", json_str(lt)));
+            s
+        })
+        .collect();
     let body = format!("{{\"issues\":[{}]}}", items.join(","));
     respond_json(stream, 200, &body)
 }
@@ -739,11 +757,18 @@ fn api_issue_detail(stream: &mut TcpStream, repo: &Path, id: &str) -> Result<(),
     // {"issue": {<summary fields>, "body": "raw markdown"}}
     let mut summary = issue_summary_json(&issue);
     summary.pop();
-    // revision exposed so GUI edits can send expected_revision (#99).
+    // revision exposed so GUI edits can send expected_revision (#99);
+    // last_touch derived from the stream (#138).
+    let lt = tissue_core::git::Repo::open(repo)
+        .ok()
+        .and_then(|g| tissue_core::sync::Core::new(g).last_touch(&issue.id).ok())
+        .unwrap_or("human");
     let body = "{\"issue\":".to_string()
         + &summary
         + ",\"revision\":"
         + &issue.revision.to_string()
+        + ",\"last_touch\":"
+        + &json_str(lt)
         + ",\"body\":"
         + &json_str(&issue.body)
         + "}}";

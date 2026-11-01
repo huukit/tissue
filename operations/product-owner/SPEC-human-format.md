@@ -63,6 +63,7 @@ Optional human commentary. AI working data does NOT go here — it goes in `agen
 - `status`: the three values above. `closed` stamps the release that shipped it when a release link exists.
 - `release`: the single canonical place an issue→release link is edited; per-release lists are derived from scanning this field.
 - `tags.needs-review`: set by the core automatically when a proposal is created; cleared on approval or rejection. Must never be hand-added silently — presence always means "an unreviewed proposal exists."
+- `last_touch` (#138, derived-only — never stored in front matter): computed on read from the agent stream: `ai-proposal` while a proposal is pending; `synced` when the last stream record is a `human-sync` reconciliation; `human` otherwise (direct edits, approvals, or no stream). Shown by the CLI list, the API summaries/detail, and the GUI badge. Being derived, it cannot drift from the stream.
 - `updated`: bumped by the core on every human-format mutation; `created` is set once.
 
 ### Invariants (enforced by `tissue-core`)

@@ -88,6 +88,13 @@ function badgeHtml(tags) {
         ? `<span class="badge-review" title="An unreviewed proposal exists">NEEDS REVIEW</span>`
         : "";
 }
+/** #138: the derived last-touch badge. */
+function lastTouchBadge(issue) {
+    var _a;
+    const lt = (_a = issue.last_touch) !== null && _a !== void 0 ? _a : "human";
+    const label = lt === "synced" ? "synced" : lt === "ai-proposal" ? "AI proposal" : "human";
+    return `<span class="last-touch last-touch-${esc(lt)}" title="who last touched this issue">${esc(label)}</span>`;
+}
 function rowHtml(issue) {
     const title = esc(issue.title);
     const updated = esc(new Date(issue.updated).toLocaleString());
@@ -95,6 +102,7 @@ function rowHtml(issue) {
     <span class="issue-id">${esc(issue.id)}</span>
     <a class="issue-link issue-title" href="#/issue/${encodeURIComponent(issue.id)}">${title}</a>
     <span class="status ${statusClass(issue.status)}">${esc(issue.status)}</span>
+    ${lastTouchBadge(issue)}
     ${badgeHtml(issue.tags)}
     <span class="issue-updated" title="updated">${updated}</span>
   </li>`;
@@ -567,6 +575,7 @@ async function renderDetail(id) {
         const fm = [
             ["id", esc(issue.id)],
             ["status", `<span class="status ${statusClass(issue.status)}">${esc(issue.status)}</span>`],
+            ["last touch", lastTouchBadge(issue)],
             ["release", esc((_a = issue.release) !== null && _a !== void 0 ? _a : "—")],
             ["tags", issue.tags.length ? esc(issue.tags.join(", ")) : "—"],
             ["created", esc(issue.created)],

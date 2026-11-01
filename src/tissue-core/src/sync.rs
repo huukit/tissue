@@ -585,6 +585,49 @@ impl Core {
         )?)
     }
 
+    /// #138: the derived last-touch state — who last touched the issue.
+    /// Computed on read from the agent stream (never stored in front
+    /// matter, so it cannot drift). Semantics (AC1):
+    /// - `ai-proposal`: a proposal is pending decision (creation draft or
+    ///   field edit) — rendered with needs-review, as today.
+    /// - `synced`: the last stream event was a `human-sync` reconciliation
+    ///   (#136): the AI stream is known-consistent with the human format.
+    /// - `human`: anything else — direct human edits, approvals, or no
+    ///   stream at all (human-created, never synced).
+    pub fn last_touch(&self, issue_id: &str) -> Result<&'static str> {
+        let records = self.read_stream(issue_id)?;
+        // A pending proposal: a proposal_id with no later decision record.
+        for r in records.iter() {
+            if r.get("type").and_then(Value::as_str) != Some("proposal") {
+                continue;
+            }
+            let pid = r
+                .get("data")
+                .and_then(|d| d.get("proposal_id"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let decided = records.iter().any(|r2| {
+                matches!(
+                    r2.get("type").and_then(Value::as_str),
+                    Some("approval") | Some("rejection")
+                ) && r2
+                    .get("data")
+                    .and_then(|d| d.get("proposal_id"))
+                    .and_then(Value::as_str)
+                    == Some(pid.as_str())
+            });
+            if !decided {
+                return Ok("ai-proposal");
+            }
+        }
+        // The last event decides between synced and human.
+        match records.last() {
+            Some(r) if r.get("type").and_then(Value::as_str) == Some("human-sync") => Ok("synced"),
+            _ => Ok("human"),
+        }
+    }
+
     /// The creation draft for an issue, if a `create` proposal is pending.
     pub fn creation_draft(&self, issue_id: &str) -> Result<Option<(String, String, String)>> {
         let records = self.read_stream(issue_id)?;

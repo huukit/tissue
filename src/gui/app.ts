@@ -32,6 +32,8 @@ interface IssueSummary {
   tags: string[];
   created: string;
   updated: string;
+  /** #138: derived — who last touched the issue (human | synced | ai-proposal). */
+  last_touch?: "human" | "synced" | "ai-proposal";
 }
 
 interface IssueDetail extends IssueSummary {
@@ -141,6 +143,13 @@ function badgeHtml(tags: string[]): string {
     : "";
 }
 
+/** #138: the derived last-touch badge. */
+function lastTouchBadge(issue: IssueSummary): string {
+  const lt = issue.last_touch ?? "human";
+  const label = lt === "synced" ? "synced" : lt === "ai-proposal" ? "AI proposal" : "human";
+  return `<span class="last-touch last-touch-${esc(lt)}" title="who last touched this issue">${esc(label)}</span>`;
+}
+
 function rowHtml(issue: IssueSummary): string {
   const title = esc(issue.title);
   const updated = esc(new Date(issue.updated).toLocaleString());
@@ -148,6 +157,7 @@ function rowHtml(issue: IssueSummary): string {
     <span class="issue-id">${esc(issue.id)}</span>
     <a class="issue-link issue-title" href="#/issue/${encodeURIComponent(issue.id)}">${title}</a>
     <span class="status ${statusClass(issue.status)}">${esc(issue.status)}</span>
+    ${lastTouchBadge(issue)}
     ${badgeHtml(issue.tags)}
     <span class="issue-updated" title="updated">${updated}</span>
   </li>`;
@@ -662,6 +672,7 @@ async function renderDetail(id: string): Promise<void> {
     const fm = [
       ["id", esc(issue.id)],
       ["status", `<span class="status ${statusClass(issue.status)}">${esc(issue.status)}</span>`],
+      ["last touch", lastTouchBadge(issue)],
       ["release", esc(issue.release ?? "—")],
       ["tags", issue.tags.length ? esc(issue.tags.join(", ")) : "—"],
       ["created", esc(issue.created)],

@@ -942,11 +942,16 @@ fn list(
         } else {
             ""
         };
+        // #138: derived last-touch — who last touched the issue.
+        let last_touch = core_for(repo)
+            .and_then(|core| core.last_touch(&name).map_err(|e| e.to_string()))
+            .unwrap_or("human");
         println!(
-            "{}  {}  {}{}",
+            "{}  {}  {}  [{}]{}",
             issue.id,
             issue.status.as_str(),
             issue.title,
+            last_touch,
             flag
         );
     }
