@@ -84,8 +84,9 @@ refused as stale.
 4. `tissue serve` for the GUI: triage the needs-review queue, read
    proposals with before/after context, approve or reject them in the
    browser, edit front matter (conflict-safe), sync your edits, and
-   create projects ("+ New project") — every GUI action lands as the
-   same git commit as its CLI twin.
+   create issues and projects right from the list view ("+ New issue",
+   "+ New project") — every GUI action lands as the same git commit as
+   its CLI twin.
 
 **Agent:**
 1. Read `issue.md` and `agent.jsonl` for full context.

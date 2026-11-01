@@ -257,18 +257,128 @@ function bindSearch() {
         }
     });
 }
+/** The issue body template the CLI's `create` uses (#134). */
+const CREATE_BODY_TEMPLATE = "## Summary\n\nDescribe the issue.\n\n## Acceptance criteria\n\n- [ ] First criterion\n";
+/** #134: "+ New issue" form — POST /api/issues with the token, then
+ * navigate to the created issue. */
+function newIssueFormHtml() {
+    const prefix = activeProject() || knownProjects(allIssues)[0] || "IAM";
+    const next = nextIssueNumber(prefix);
+    return `<div class="new-issue-form" id="new-issue-form" hidden>
+    <h3>New issue</h3>
+    <label>Id
+      <input id="new-issue-id" type="text" value="${esc(prefix + "-" + next)}"
+             aria-label="Issue id (PREFIX-number)">
+    </label>
+    <label>Title
+      <input id="new-issue-title" type="text" placeholder="One line" aria-label="Issue title">
+    </label>
+    <label>Body
+      <textarea id="new-issue-body" rows="8" aria-label="Issue body">${esc(CREATE_BODY_TEMPLATE)}</textarea>
+    </label>
+    <button id="new-issue-create" class="btn">Create issue</button>
+    <button id="new-issue-cancel" class="btn btn-ghost">Cancel</button>
+    <p id="new-issue-result" class="edit-result" aria-live="polite"></p>
+  </div>`;
+}
+/** Next free number under a prefix, from the loaded issues. */
+function nextIssueNumber(prefix) {
+    let max = 0;
+    for (const i of allIssues) {
+        const m = new RegExp(`^${prefix}-(\\d+)$`).exec(i.id);
+        if (m)
+            max = Math.max(max, parseInt(m[1], 10));
+    }
+    return max + 1;
+}
+function bindNewIssue() {
+    var _a, _b;
+    const form = document.getElementById("new-issue-form");
+    if (!form)
+        return;
+    const result = document.getElementById("new-issue-result");
+    const idEl = document.getElementById("new-issue-id");
+    const titleEl = document.getElementById("new-issue-title");
+    const bodyEl = document.getElementById("new-issue-body");
+    (_a = document.getElementById("new-issue-cancel")) === null || _a === void 0 ? void 0 : _a.addEventListener("click", () => {
+        form.hidden = true;
+    });
+    (_b = document.getElementById("new-issue-create")) === null || _b === void 0 ? void 0 : _b.addEventListener("click", async () => {
+        if (!result || !idEl || !titleEl)
+            return;
+        const id = idEl.value.trim();
+        const title = titleEl.value.trim();
+        if (!/^[A-Z]+-\d+$/.test(id)) {
+            result.textContent = "The id must look like PREFIX-number (e.g. IAM-6).";
+            return;
+        }
+        if (!title) {
+            result.textContent = "A one-line title is required.";
+            return;
+        }
+        result.textContent = "…";
+        try {
+            await postJson("/api/issues", {
+                id,
+                title,
+                body: bodyEl ? bodyEl.value : undefined,
+                actor: "human:gui",
+            });
+            // Created: navigate to the new issue's detail.
+            window.location.hash = `#/issue/${encodeURIComponent(id)}`;
+        }
+        catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            result.textContent = /401|token/i.test(msg)
+                ? "Creating failed — set the API token first (it protects all write actions)."
+                : /already exists/i.test(msg)
+                    ? `Issue ${id} already exists — pick another number.`
+                    : msg;
+        }
+    });
+}
 function renderIssueList() {
+    var _a, _b;
     const el = app();
     if (!el)
         return;
     const visible = applyFilters(allIssues);
+    // #134: the token bar lives on the list header so every write action
+    // (new issue, approve/reject, sync, edit) shares one token entry point.
+    const header = `
+    ${tokenBarHtml()}
+    <div class="list-toolbar">
+      ${searchInputHtml()}
+      <button id="new-issue-btn" class="btn" title="Create an issue (needs the API token)">+ New issue</button>
+    </div>
+    ${newIssueFormHtml()}`;
+    bindTokenBar();
     if (visible.length === 0) {
-        el.innerHTML = `<p class="loading">No issues found in this issue repo.</p>`;
+        el.innerHTML = `
+    ${header}
+    <p class="loading">No issues found in this issue repo.</p>`;
+        (_a = document.getElementById("new-issue-btn")) === null || _a === void 0 ? void 0 : _a.addEventListener("click", () => {
+            const f = document.getElementById("new-issue-form");
+            if (f)
+                f.hidden = !f.hidden;
+        });
+        bindNewIssue();
+        bindSearch();
         return;
     }
     el.innerHTML = `
-    ${searchInputHtml()}
+    ${header}
     <ul class="issue-list" id="issue-list">${visible.map(rowHtml).join("")}</ul>`;
+    (_b = document.getElementById("new-issue-btn")) === null || _b === void 0 ? void 0 : _b.addEventListener("click", () => {
+        const f = document.getElementById("new-issue-form");
+        if (f)
+            f.hidden = !f.hidden;
+        if (!(f === null || f === void 0 ? void 0 : f.hidden)) {
+            const t = document.getElementById("new-issue-title");
+            t === null || t === void 0 ? void 0 : t.focus();
+        }
+    });
+    bindNewIssue();
     bindSearch();
 }
 /** Token field (sessionStorage only) + hint text; shown when no token. */

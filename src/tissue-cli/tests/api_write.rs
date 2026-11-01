@@ -492,6 +492,52 @@ fn gui_sync_endpoint_matches_cli_commit() {
     assert!(status.contains("401"), "wrong token: {status}");
 }
 
+/// #134: creating via POST /api/issues with a body lands the body in the
+/// human format and commits like the CLI.
+#[test]
+fn create_via_api_with_body_commits() {
+    let repo = Scratch::new("create-body");
+    repo.set_token("test-token-1");
+    let server = start_server(&repo);
+    let addr = server.addr;
+    let before = repo.commit_count();
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues",
+        r###"{"id":"IAM-7","title":"From the GUI","body":"## Summary\n\n- works","actor":"human:gui"}"###,
+        Some("test-token-1"),
+    );
+    assert!(status.contains("201"), "create: {status} body {body}");
+    assert_eq!(repo.commit_count(), before + 1, "create = one commit");
+    let issue = std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-7/issue.md")).unwrap();
+    assert!(issue.contains("From the GUI"), "title written: {issue}");
+    assert!(issue.contains("## Summary"), "body written: {issue}");
+    // The new issue appears in the read the GUI uses to navigate.
+    let (status, body) = get(&addr, "/api/issues");
+    assert!(
+        status.contains("200") && body.contains("IAM-7"),
+        "listed: {body}"
+    );
+    // Duplicate id and bad id fail cleanly.
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues",
+        r#"{"id":"IAM-7","title":"dup"}"#,
+        Some("test-token-1"),
+    );
+    assert!(
+        status.contains("400") && body.contains("already exists"),
+        "dup: {status} {body}"
+    );
+    let (status, _, _) = post(
+        &addr,
+        "/api/issues",
+        r#"{"id":"../etc","title":"bad"}"#,
+        Some("test-token-1"),
+    );
+    assert!(status.contains("400"), "bad id refused: {status}");
+}
+
 /// #118 regression: a CLI-synced issue must stay writable via the API.
 /// `tissue sync` used to write the human-sync record without the
 /// `reconciliation` field; strict `AgentStream::open` then rejected

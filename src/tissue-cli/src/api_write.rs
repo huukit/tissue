@@ -71,8 +71,9 @@ pub fn create_issue(
     if dir.exists() {
         return Err(format!("issue `{id}` already exists"));
     }
+    let body_text = body.unwrap_or("");
     let now = now_utc();
-    let issue = IssueFile::new(id, title, IssueStatus::Open, body.unwrap_or(""), &now)
+    let issue = IssueFile::new(id, title, IssueStatus::Open, body_text, &now)
         .map_err(|e| format!("building issue: {e}"))?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     issue
