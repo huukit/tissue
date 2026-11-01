@@ -332,6 +332,93 @@ fn serve_release_detail_contract() {
     assert!(status.contains("404"), "traversal id must 404: {status}");
 }
 
+/// #120: with no token resolvable, serve must warn at startup (writes are
+/// silently 401 otherwise) and keep serving reads. With a token, no warning.
+#[test]
+fn serve_warns_when_no_api_token_configured() {
+    let scratch = Scratch::new("token-warn");
+
+    // Reserve an ephemeral port.
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("reserve port");
+    let port = listener.local_addr().expect("addr").port();
+    drop(listener);
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let exe: PathBuf = env!("CARGO_BIN_EXE_tissue").into();
+
+    // No token: env unset, config has no api_token (Scratch::new setup).
+    let mut child = Command::new(&exe)
+        .args(["serve", "--port", &port.to_string()])
+        .current_dir(&scratch.root)
+        .env_remove("TISSUE_API_TOKEN")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn tissue serve");
+    for _ in 0..100 {
+        if TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50)).is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let (status, body) = get(&addr, "/api/issues");
+    assert!(
+        status.contains("200"),
+        "reads still work: {status} body {body}"
+    );
+    // The warning goes to stderr; give the subprocess a moment to flush.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let _ = child.kill();
+    let out = child.wait_with_output().expect("wait");
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        err.contains("no API token configured"),
+        "warning on stderr without a token: {err}"
+    );
+    assert!(
+        err.contains("read-only until one is set"),
+        "warning explains the effect: {err}"
+    );
+
+    // With TISSUE_API_TOKEN set: no warning, and a write succeeds (AC2).
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("reserve port 2");
+    let port = listener.local_addr().expect("addr").port();
+    drop(listener);
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let mut child = Command::new(&exe)
+        .args(["serve", "--port", &port.to_string()])
+        .current_dir(&scratch.root)
+        .env("TISSUE_API_TOKEN", "e2e-token")
+        .env_remove("EDITOR")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn tissue serve");
+    for _ in 0..100 {
+        if TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50)).is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let body = r#"{"actor":"agent:dev-1","data":{"type":"observation","summary":"write works"}}"#;
+    let req = format!(
+        "POST /api/issues/IAM-1/records HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer e2e-token\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let (status, _headers, resp) = http(&addr, &req);
+    assert!(
+        status.contains("201"),
+        "write with token: {status} body {resp}"
+    );
+    let _ = child.kill();
+    let out = child.wait_with_output().expect("wait 2");
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        !err.contains("no API token configured"),
+        "no warning with a token: {err}"
+    );
+}
+
 #[test]
 fn serve_rejects_path_traversal() {
     let scratch = Scratch::new("traversal");

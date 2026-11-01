@@ -41,6 +41,13 @@ pub fn serve(
     }
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
     let listener = TcpListener::bind(addr).map_err(|e| format!("binding {addr}: {e}"))?;
+    // #120: with no token resolvable, GUI write actions and agent POSTs
+    // 401 with no startup hint. Reads are unaffected either way.
+    if api_token(&repo).is_none() {
+        eprintln!(
+            "note: no API token configured (TISSUE_API_TOKEN / api_token:) — the GUI and agent write API are read-only until one is set"
+        );
+    }
     println!(
         "tissue viewer (read-only) on http://{addr}/ — repo: {}{}",
         repo.display(),
