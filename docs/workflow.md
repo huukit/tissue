@@ -34,9 +34,13 @@ After you edit `issue.md`, run
 tissue sync IAM-42 --summary "rewrote acceptance criteria"
 ```
 
-This appends a `human-sync` record to `agent.jsonl` and commits it.
-Agents reconcile their working stream from that record onward — they
-never have to diff your file to discover your intent.
+This appends a `human-sync` record to `agent.jsonl` and commits it. The
+record carries the **exact field-level changes** since the last sync
+(title/status/release/tags/body — computed by tissue, not retyped by you),
+plus a snapshot of the human format at sync time. Agents reconcile their
+working stream from that data onward — they never have to diff your file
+to discover your intent. If nothing changed since the last sync, tissue
+says `nothing to sync` and makes no record and no commit.
 
 **AI → human: propose → tag → approve/reject.**
 An agent never edits `issue.md`. It proposes:

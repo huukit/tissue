@@ -20,7 +20,7 @@
 
 use std::fmt;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
@@ -367,13 +367,37 @@ impl Core {
 
     // -- the loop ------------------------------------------------------------
 
-    /// `tissue sync <id>`: write a `human-sync` record and commit.
-    /// The agent reconciles from this record onward, never from raw diffs.
+    /// `tissue sync <id>`: reconcile the human format into the AI stream.
+    ///
+    /// Decision 4's actual promise (#136): the record carries the exact
+    /// field-level changes since the last sync baseline, so agents answer
+    /// "what did the human change since I last looked" from data, not from
+    /// raw diffs. Nothing changed since the baseline => no record, no
+    /// commit ("nothing to sync").
     pub fn sync(&self, issue_id: &str, actor: &Actor, now: &str, summary: &str) -> Result<String> {
         let dir = self.issue_dir(issue_id)?;
         if !dir.is_dir() {
             return Err(Error::Proposal(format!("issue {issue_id} not found")));
         }
+        let issue_path = self.issue_path(issue_id)?;
+        let current_text = fs::read_to_string(&issue_path)
+            .map_err(|e| Error::Io(format!("{}: {e}", issue_path.display())))?;
+        let current = IssueFile::parse(&current_text)?;
+        let baseline = self.last_sync_baseline(issue_id, &issue_path)?;
+        let changes = match &baseline {
+            Some(before) => Self::human_format_changes(before, &current),
+            None => {
+                // No baseline resolvable (no prior sync, nothing at HEAD):
+                // record the full current state as the reconciliation.
+                Self::human_format_changes(&Self::empty_baseline(&current), &current)
+            }
+        };
+        if changes.is_empty() {
+            return Err(Error::Proposal(format!(
+                "nothing to sync: {issue_id} unchanged since the last sync baseline"
+            )));
+        }
+        let revision_before = baseline.as_ref().map(|b| b.revision).unwrap_or(0);
         self.append_record(
             issue_id,
             json!({
@@ -381,13 +405,107 @@ impl Core {
                 "ts": now,
                 "actor": actor.id,
                 "refs": [],
-                "data": { "trigger": "command", "summary_of_human_change": summary,
-                          "reconciliation": "from sync record onward" }
+                "data": {
+                    "trigger": "command",
+                    "summary_of_human_change": summary,
+                    "reconciliation": "from sync record onward",
+                    "changes": changes,
+                    "revision_before": revision_before,
+                    "revision_after": current.revision,
+                    "snapshot": current_text
+                }
             }),
         )?;
         Ok(self
             .repo
             .commit_all(&actor.author, &format!("sync {issue_id}: {summary}"))?)
+    }
+
+    /// The issue as of the last sync baseline. The last `human-sync`
+    /// record carries the full human-format snapshot at its sync time —
+    /// traveling in the record keeps the baseline valid across rebases
+    /// (a commit sha would not survive history rewrites). No prior sync:
+    /// the file as committed at HEAD (the pre-sync state); `None` if not
+    /// even that resolvable.
+    fn last_sync_baseline(&self, issue_id: &str, issue_path: &Path) -> Result<Option<IssueFile>> {
+        let mut baseline: Option<IssueFile> = None;
+        for record in self.read_stream(issue_id)? {
+            if record.get("type").and_then(Value::as_str) != Some("human-sync") {
+                continue;
+            }
+            let Some(data) = record.get("data") else {
+                continue;
+            };
+            let Some(snapshot) = data.get("snapshot").and_then(Value::as_str) else {
+                continue;
+            };
+            if let Ok(issue) = IssueFile::parse(snapshot) {
+                baseline = Some(issue);
+            }
+        }
+        if baseline.is_none() {
+            if let Some(rel) = self.repo_relative(issue_path) {
+                if let Ok(text) = self.repo.show_file_at_head(&rel) {
+                    if let Ok(issue) = IssueFile::parse(&text) {
+                        baseline = Some(issue);
+                    }
+                }
+            }
+        }
+        Ok(baseline)
+    }
+
+    /// A synthetic pre-history baseline: everything differs from it, so
+    /// the first sync (or a sync with no resolvable baseline) records the
+    /// full current state as changes.
+    fn empty_baseline(like: &IssueFile) -> IssueFile {
+        let synthetic = format!(
+            "---\nid: {}\ntitle: \"\"\nstatus: {}\ncreated: \"\"\nupdated: \"\"\nrevision: 0\n---\n\n",
+            like.id,
+            like.status.as_str()
+        );
+        IssueFile::parse(&synthetic).unwrap_or_else(|_| like.clone())
+    }
+
+    /// Path of an issue file relative to the repo root (for `git show`).
+    fn repo_relative(&self, issue_path: &Path) -> Option<String> {
+        let root = self.repo.root();
+        issue_path
+            .strip_prefix(root)
+            .ok()
+            .and_then(|rel| rel.to_str())
+            .map(|s| s.to_string())
+    }
+
+    /// Field-level human-format diff (title/status/release/tags/body).
+    /// Front-matter bookkeeping fields (created/updated/revision) are
+    /// excluded: they move on every write and carry no reconciliation
+    /// meaning.
+    fn human_format_changes(before: &IssueFile, after: &IssueFile) -> Vec<Value> {
+        let mut changes = Vec::new();
+        let mut push = |field: &str, from: String, to: String| {
+            if from != to {
+                changes.push(json!({
+                    "field": field,
+                    "from": from,
+                    "to": to
+                }));
+            }
+        };
+        push("title", before.title.clone(), after.title.clone());
+        push(
+            "status",
+            before.status.as_str().to_string(),
+            after.status.as_str().to_string(),
+        );
+        push(
+            "release",
+            before.release.clone().unwrap_or_default(),
+            after.release.clone().unwrap_or_default(),
+        );
+        push("tags", before.tags.join(" "), after.tags.join(" "));
+        push("body", before.body.clone(), after.body.clone());
+        changes
     }
 
     /// `tissue propose <id>`: create a proposal record, set `needs-review`,
@@ -893,10 +1011,24 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Edit the human format directly (decision 4: humans own it).
+    fn human_edit(core: &Core, id: &str, from: &str, to: &str) {
+        let path = core.issue_path(id).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains(from), "edit precondition: {from} in {text}");
+        fs::write(&path, text.replace(from, to)).unwrap();
+    }
+
     #[test]
-    fn sync_writes_human_sync_record_and_commits() {
+    fn sync_records_field_level_changes_and_commits() {
         let (dir, core) = temp_core();
         seed_issue(&core, "IAM-1");
+        human_edit(
+            &core,
+            "IAM-1",
+            "title: Seed issue",
+            "title: Renamed by human",
+        );
         core.sync(
             "IAM-1",
             &human_actor(),
@@ -909,6 +1041,60 @@ mod tests {
         assert_eq!(records[0]["type"], "human-sync");
         assert_eq!(records[0]["seq"], 1);
         assert!(records[0]["id"].as_str().unwrap().starts_with("rec-"));
+        let data = &records[0]["data"];
+        // AC1: the record carries the exact field-level change.
+        let changes = data["changes"].as_array().unwrap();
+        assert_eq!(changes.len(), 1, "only the title moved: {changes:?}");
+        assert_eq!(changes[0]["field"], "title");
+        assert_eq!(changes[0]["from"], "Seed issue");
+        assert_eq!(changes[0]["to"], "Renamed by human");
+        // Baseline snapshot travels in the record (rebase-proof).
+        let snapshot = data["snapshot"].as_str().unwrap();
+        assert!(snapshot.contains("Renamed by human"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_with_no_changes_since_baseline_is_a_noop() {
+        let (dir, core) = temp_core();
+        seed_issue(&core, "IAM-1");
+        // AC2: unchanged since baseline -> "nothing to sync", no record,
+        // no commit.
+        let before = core.repo().commit_count().unwrap();
+        let err = core
+            .sync("IAM-1", &human_actor(), "2026-10-08T12:00:00Z", "x")
+            .unwrap_err();
+        assert!(err.to_string().contains("nothing to sync"), "{err}");
+        assert!(core.read_stream("IAM-1").unwrap().is_empty());
+        assert_eq!(core.repo().commit_count().unwrap(), before);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn second_sync_diffs_against_the_last_sync_baseline() {
+        let (dir, core) = temp_core();
+        seed_issue(&core, "IAM-1");
+        human_edit(&core, "IAM-1", "title: Seed issue", "title: First edit");
+        core.sync("IAM-1", &human_actor(), "2026-10-08T12:00:00Z", "one")
+            .unwrap();
+        // Second sync with no further edits: nothing to sync.
+        let err = core
+            .sync("IAM-1", &human_actor(), "2026-10-08T12:30:00Z", "two")
+            .unwrap_err();
+        assert!(err.to_string().contains("nothing to sync"), "{err}");
+        // A second edit syncs only the new delta against the snapshot.
+        human_edit(&core, "IAM-1", "## Summary", "## Summary (edited)");
+        core.sync("IAM-1", &human_actor(), "2026-10-08T13:00:00Z", "three")
+            .unwrap();
+        let records = core.read_stream("IAM-1").unwrap();
+        let second = &records[1]["data"];
+        let changes = second["changes"].as_array().unwrap();
+        assert_eq!(
+            changes.len(),
+            1,
+            "only the body moved this time: {changes:?}"
+        );
+        assert_eq!(changes[0]["field"], "body");
         let _ = fs::remove_dir_all(&dir);
     }
 

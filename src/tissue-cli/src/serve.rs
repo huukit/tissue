@@ -553,6 +553,15 @@ fn api_write_sync(
     let actor_id = json_field(&v, "actor").unwrap_or("human:gui");
     match crate::api_write::sync(repo, id, summary, actor_id) {
         Ok(()) => respond_json(stream, 201, "{\"synced\":true}"),
+        Err(e) if e.contains("nothing to sync") => {
+            // #136: not an error — the human format simply has no changes
+            // since the last sync baseline. No record, no commit.
+            respond_json(
+                stream,
+                200,
+                &format!("{{\"synced\":false,\"reason\":{}}}", json_str(&e)),
+            )
+        }
         Err(e) => respond_json(
             stream,
             400,

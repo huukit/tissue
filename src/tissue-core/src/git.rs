@@ -157,6 +157,12 @@ impl Repo {
             .to_string())
     }
 
+    /// A file's contents as committed at HEAD (repo-root-relative path).
+    /// Errors when there is no HEAD yet or the path is not tracked.
+    pub fn show_file_at_head(&self, rel_path: &str) -> Result<String> {
+        git(&self.root, &["show", &format!("HEAD:{rel_path}")])
+    }
+
     /// Stage everything and create exactly one commit. Returns its short id.
     pub fn commit_all(&self, author: &Author, message: &str) -> Result<String> {
         git(&self.root, &["add", "-A"])?;

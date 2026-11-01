@@ -226,7 +226,16 @@ fn full_dogfood_loop_e2e() {
     assert!(list.contains("IAM-1") && list.contains("IAM-2"));
     assert!(!list.contains("NEEDS REVIEW"), "no flags expected: {list}");
 
-    // sync: one commit, human-sync record in the stream
+    // sync: one commit, human-sync record in the stream. #136: the sync
+    // records the field-level diff, so make a real human edit first
+    // (uncommitted working tree — the human owns the format).
+    let issue_md = repo.root.join(".tissue/issues/IAM-1/issue.md");
+    let text = std::fs::read_to_string(&issue_md).unwrap();
+    std::fs::write(
+        &issue_md,
+        text.replace("title: First issue", "title: First issue (edited)"),
+    )
+    .unwrap();
     let before = repo.commit_count();
     let out = repo.tissue(&["sync", "IAM-1", "--summary", "human edit"]);
     Repo::assert_success(&out, "tissue sync");
@@ -239,6 +248,10 @@ fn full_dogfood_loop_e2e() {
     let stream = repo.agent_stream("IAM-1");
     assert!(stream.contains("\"type\":\"human-sync\""));
     assert!(stream.contains("human edit"));
+    assert!(
+        stream.contains("\"changes\":[{\"field\":\"title\""),
+        "sync record carries the field-level change (#136): {stream}"
+    );
 
     // propose: needs-review flag surfaces in list
     let out = repo.tissue(&[
@@ -247,7 +260,7 @@ fn full_dogfood_loop_e2e() {
         "--field",
         "title",
         "--current",
-        "First issue",
+        "First issue (edited)",
         "--proposed",
         "Renamed issue",
         "--rationale",

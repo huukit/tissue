@@ -161,6 +161,17 @@ pub enum RecordData {
         summary_of_human_change: String,
         #[serde(default)]
         reconciliation: String,
+        // #136: the exact field-level diff since the last sync baseline
+        // and the full human-format snapshot at sync time (the next
+        // sync's baseline). Optional: pre-#136 records lack them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        changes: Option<Vec<serde_json::Value>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revision_before: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revision_after: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        snapshot: Option<String>,
     },
     Proposal {
         proposal_id: String,

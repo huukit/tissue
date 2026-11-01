@@ -347,11 +347,17 @@ fn malformed_issue_md_errors_not_panics() {
         );
     }
 
-    // sync does not parse issue.md — by design
+    // #136: sync now parses issue.md (it must, to compute the field-level
+    // diff) — on a malformed file it fails cleanly, never panics.
     let out = repo.tissue(&["sync", "IAM-1", "--summary", "s"]);
     assert!(
-        out.status.success(),
-        "sync does not parse issue.md and must succeed: {}",
+        !out.status.success(),
+        "sync on malformed issue.md must fail cleanly: {:?}",
+        out
+    );
+    assert!(
+        !Repo::stderr(&out).contains("panicked"),
+        "sync must not panic on malformed issue.md: {}",
         Repo::stderr(&out)
     );
 

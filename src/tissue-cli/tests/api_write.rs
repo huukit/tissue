@@ -411,6 +411,14 @@ fn gui_sync_endpoint_matches_cli_commit() {
     let repo = Scratch::new("gui-sync");
     repo.set_token("test-token-1");
     repo.tissue(&["create", "IAM-1", "Synced issue", "--body", "b"]);
+    // #136: a human edit before the sync, so there is a change to record.
+    let issue_md = repo.root.join(".tissue/issues/IAM-1/issue.md");
+    let text = std::fs::read_to_string(&issue_md).unwrap();
+    std::fs::write(
+        &issue_md,
+        text.replace("title: Synced issue", "title: Synced and renamed"),
+    )
+    .unwrap();
     let server = start_server(&repo);
     let addr = server.addr;
     let before = repo.commit_count();
@@ -429,6 +437,17 @@ fn gui_sync_endpoint_matches_cli_commit() {
     assert!(stream.contains("human-sync"), "record type: {stream}");
     assert!(stream.contains("rewrote the summary"), "summary: {stream}");
     // Auth still required: no token -> 401, wrong token -> 401.
+    // #136: no changes since the last sync -> 200 synced:false, not 400.
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues/IAM-1/sync",
+        r#"{"summary": "nothing moved"}"#,
+        Some("test-token-1"),
+    );
+    assert!(
+        status.contains("200") && body.contains("\"synced\":false"),
+        "nothing to sync is a no-op result, not an error: {status} {body}"
+    );
     let (status, _, _) = post(&addr, "/api/issues/IAM-1/sync", r#"{"summary":"x"}"#, None);
     assert!(status.contains("401"), "no token: {status}");
     let (status, _, _) = post(
@@ -449,6 +468,16 @@ fn append_via_api_after_cli_sync() {
     let repo = Scratch::new("sync-then-append");
     repo.set_token("test-token-1");
     repo.tissue(&["create", "IAM-1", "Synced first", "--body", "b"]);
+    // #136: sync only records when the human format actually changed —
+    // make a real human edit first.
+    let issue_md = repo.root.join(".tissue/issues/IAM-1/issue.md");
+    let text = std::fs::read_to_string(&issue_md).unwrap();
+    assert!(text.contains("title: Synced first"), "precondition: {text}");
+    std::fs::write(
+        &issue_md,
+        text.replace("title: Synced first", "title: Synced and edited"),
+    )
+    .unwrap();
     let out = repo.tissue(&["sync", "IAM-1", "--summary", "human edited"]);
     assert!(out.status.success(), "cli sync failed: {out:?}");
     let server = start_server(&repo);

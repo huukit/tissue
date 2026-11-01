@@ -487,7 +487,7 @@ function editFormHtml(issue) {
                  placeholder="e.g. v1.2.0 (empty = unscheduled)">
         </label>
         <button id="edit-submit">Save changes</button>
-        <button id="sync-btn" title="Record a human edit note in the agent stream">Add sync note</button>
+        <button id="sync-btn" title="Reconcile your edits into the agent stream (records the exact field-level changes since the last sync)">Sync</button>
       </div>
       <p id="edit-result" class="edit-result" aria-live="polite"></p>
     </details>`;
@@ -532,15 +532,24 @@ function wireEditForm(issue) {
         }
     });
     sync.addEventListener("click", async () => {
+        var _a;
         result.textContent = "…";
-        const summary = prompt("One-line summary of your manual edit (recorded in the agent stream):");
+        const summary = prompt("One-line summary of your edit (recorded with the exact field-level changes):");
         if (!summary) {
             result.textContent = "Sync cancelled — no summary given.";
             return;
         }
         try {
-            await postJson(`/api/issues/${encodeURIComponent(issue.id)}/sync`, { summary, actor: "human:gui" });
-            result.textContent = "Recorded. Agents reconcile from this note.";
+            // #136: sync computes the field-level diff since the last sync
+            // baseline and records it — agents reconcile from that data.
+            const r = await postJson(`/api/issues/${encodeURIComponent(issue.id)}/sync`, { summary, actor: "human:gui" });
+            if (r.synced) {
+                result.textContent = "Synced — your changes are recorded in the agent stream for agents to reconcile from.";
+                void route();
+            }
+            else {
+                result.textContent = (_a = r.reason) !== null && _a !== void 0 ? _a : "Nothing to sync — no changes since the last sync.";
+            }
         }
         catch (e) {
             result.textContent = e instanceof Error ? e.message : String(e);

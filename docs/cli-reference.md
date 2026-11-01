@@ -162,9 +162,14 @@ tissue show IAM-42
 ## `tissue sync <ID> --summary <TEXT>`
 
 Record a human edit in the AI stream. Run this **after** editing
-`issue.md` — agents reconcile from this record onward, never from raw
-diffs. Appends a `human-sync` record to `agent.jsonl`.
-Commits: exactly one, `sync <ID>: <summary>`.
+`issue.md` — tissue computes the exact field-level changes since the last
+sync (title/status/release/tags/body) and records them in the
+`human-sync` record, together with a snapshot of the human format at sync
+time (the next sync's baseline). Agents reconcile from that data, never
+from raw diffs.
+Commits: exactly one, `sync <ID>: <summary>`. If nothing changed since the
+last sync, the command reports `nothing to sync` and makes no record and
+no commit.
 
 ```sh
 tissue sync IAM-42 --summary "rewrote acceptance criteria"
