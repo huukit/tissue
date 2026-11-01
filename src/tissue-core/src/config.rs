@@ -240,6 +240,19 @@ pub fn run_agent(
             "HOME",
             std::env::var("HOME").unwrap_or_else(|_| "/".to_string()),
         );
+    // #137: run the agent in its own process group so a timeout kills the
+    // whole tree — orphaned descendants must not hold the stderr pipe (and
+    // stall the caller) after the direct child is killed.
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            if libc_setpgid(0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     for (k, v) in &agent.env {
         // Never let config override the scrubbed essentials with a token.
         if k == "TISSUE_API_TOKEN" {
@@ -279,9 +292,11 @@ pub fn run_agent(
     })
 }
 
-/// Wait for the child up to `timeout`; on timeout, kill and reap, and
-/// return `Ok((None, stderr-so-far))`. Reading stderr concurrently avoids
-/// a deadlock when the child fills the stderr pipe while we wait.
+/// Wait for the child up to `timeout`; on timeout, kill the child's whole
+/// process group (the agent ran in its own pgid) and reap the direct child,
+/// returning `Ok((None, stderr-so-far))`. The stderr drain is bounded: after
+/// a group kill, remaining descendants may still hold the pipe, so we read
+/// what is available without blocking forever.
 fn wait_with_timeout(
     child: &mut std::process::Child,
     timeout: Duration,
@@ -299,14 +314,109 @@ fn wait_with_timeout(
             return Ok((Some(status), buf));
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
+            kill_process_group(child.id());
             let _ = child.wait();
-            let mut buf = Vec::new();
-            let _ = stderr.read_to_end(&mut buf);
+            let buf = drain_stderr_bounded(stderr, Duration::from_millis(250));
             return Ok((None, buf));
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// Kill the agent's process group (negative pid = the group). Best effort:
+/// if the group is already gone, nothing to do. On non-unix this falls back
+/// to the direct child only (already killed by the caller path).
+#[cfg(unix)]
+fn kill_process_group(pid: u32) {
+    unsafe {
+        libc_kill(-(pid as i32), 9);
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(_pid: u32) {}
+
+/// Read stderr without ever blocking longer than `bound`: after a group
+/// kill, orphaned descendants may still hold the write end of the pipe, so a
+/// blocking read_to_end would stall until they exit — the exact defect the
+/// process-group kill is meant to prevent.
+#[cfg(unix)]
+fn drain_stderr_bounded<R: std::io::Read + std::os::unix::io::AsRawFd>(
+    mut r: R,
+    bound: Duration,
+) -> Vec<u8> {
+    let fd = std::os::unix::io::AsRawFd::as_raw_fd(&r);
+    let mut buf = Vec::new();
+    let start = Instant::now();
+    loop {
+        let remaining = bound.checked_sub(start.elapsed()).unwrap_or_default();
+        if remaining.is_zero() {
+            break;
+        }
+        let mut pfd = libc_pollfd {
+            fd,
+            events: 1, // POLLIN
+            revents: 0,
+        };
+        let n = unsafe {
+            libc_poll(
+                &mut pfd,
+                1,
+                remaining.as_millis().min(i32::MAX as u128) as i32,
+            )
+        };
+        if n <= 0 {
+            break; // timeout or error: return what we have
+        }
+        let mut chunk = [0u8; 4096];
+        match r.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(_) => break,
+        }
+    }
+    buf
+}
+
+#[cfg(not(unix))]
+fn drain_stderr_bounded<R: std::io::Read>(mut r: R, _bound: Duration) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let _ = r.read_to_end(&mut buf);
+    buf
+}
+
+// Minimal libc FFI — the workspace has no libc dependency and adding one for
+// setpgid/kill/poll is not warranted (AGENTS.md: no new deps unless needed).
+#[cfg(unix)]
+unsafe fn libc_setpgid(pid: i32, pgid: i32) -> i32 {
+    extern "C" {
+        fn setpgid(pid: i32, pgid: i32) -> i32;
+    }
+    setpgid(pid, pgid)
+}
+
+#[cfg(unix)]
+unsafe fn libc_kill(pid: i32, sig: i32) -> i32 {
+    extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    kill(pid, sig)
+}
+
+#[cfg(unix)]
+#[repr(C)]
+struct libc_pollfd {
+    fd: i32,
+    events: i16,
+    revents: i16,
+}
+
+#[cfg(unix)]
+unsafe fn libc_poll(fds: *mut libc_pollfd, nfds: u64, timeout_ms: i32) -> i32 {
+    extern "C" {
+        fn poll(fds: *mut libc_pollfd, nfds: u64, timeout: i32) -> i32;
+    }
+    poll(fds, nfds, timeout_ms)
 }
 
 #[cfg(test)]
@@ -494,6 +604,36 @@ mod tests {
         assert!(outcome.timed_out, "{outcome:?}");
         assert_eq!(outcome.exit_code, None);
         assert!(!outcome.success());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Tester finding on PR #155 (blocking): a timeout must bound
+    /// wall-clock time even when the agent leaves an orphaned descendant
+    /// holding the stderr pipe. The agent spawns `sleep 30 &` and hangs;
+    /// run_agent must return within ~timeout, not after 30s.
+    #[test]
+    fn timeout_kills_the_whole_process_tree() {
+        let (dir, _repo) = temp_repo();
+        let spawner = dir.join("spawner-agent.sh");
+        std::fs::write(&spawner, "#!/bin/sh\nsleep 30 &\nsleep 30\n").unwrap();
+        make_executable(&spawner);
+        // Invoke via the shell interpreter: spawning the script file
+        // directly can hit ETXTBSY when the write is still settling under
+        // parallel test load.
+        let agent = AgentConfig {
+            command: "/bin/sh".to_string(),
+            args: vec![spawner.to_string_lossy().to_string()],
+            timeout_sec: 1,
+            env: BTreeMap::new(),
+        };
+        let start = std::time::Instant::now();
+        let outcome = run_agent(&dir, &agent, "IAM-1", &serde_json::json!({})).unwrap();
+        let elapsed = start.elapsed();
+        assert!(outcome.timed_out, "{outcome:?}");
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "orphaned descendant stalled the call: {elapsed:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
