@@ -51,6 +51,7 @@ Do not open PRs or push commits that reference nothing. Do not invent issue numb
 - Verify before pushing: at minimum `cargo check` and `cargo fmt --check` on changed crates; `cargo test` for anything touching `tissue-core`.
 - Draft PRs are opened for review; they are never self-merged.
 - Scope discipline: stay within the issue's scope; unrelated changes belong in their own issue/PR.
+- Branch lifecycle (#150): the repo setting "Automatically delete head branches" is on, so a merged PR's branch is deleted by GitHub right after the merge — the remote should only ever contain `main` plus the branches of currently open PRs. Never reuse a `vibe/*` branch name after a force-push rewrite (stale local/remote refs pointing at the old head caused the #110/#115 claim races); if a branch was rewritten, push with `--force-with-lease` and expect the old name to be gone. When cleaning up by hand, only delete a remote branch after verifying it is merged (`git merge-base --is-ancestor <branch> main`).
 
 ## 5. Security baseline
 
