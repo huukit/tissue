@@ -1,0 +1,6 @@
+# Python build artifacts (tools/ tests import the import script)
+__pycache__/
+*.pyc
+
+# Rust build artifacts
+src/target/
