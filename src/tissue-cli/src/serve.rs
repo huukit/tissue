@@ -1332,7 +1332,7 @@ fn creation_draft_summary(repo: &Path, dir: &Path) -> Option<IssueFile> {
     let draft = core.creation_draft(name).ok()??;
     let (_pid, title, _body) = draft;
     let mut issue = IssueFile::new(name, &title, IssueStatus::Open, "", "").ok()?;
-    issue.add_tag(tissue_core::human::NEEDS_REVIEW, "");
+    issue.add_tag(tissue_core::human::NEEDS_REVIEW, "").ok()?;
     Some(issue)
 }
 
@@ -1617,7 +1617,9 @@ mod tests {
         )
         .unwrap();
         assert!(!issue_summary_json(&issue).contains("needsReview"));
-        issue.add_tag(tissue_core::human::NEEDS_REVIEW, now);
+        issue
+            .add_tag(tissue_core::human::NEEDS_REVIEW, now)
+            .unwrap();
         // The tag is the single source of truth; no derived boolean field.
         assert!(issue_summary_json(&issue).contains("\"needs-review\""));
         assert!(!issue_summary_json(&issue).contains("needsReview"));

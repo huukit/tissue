@@ -454,7 +454,17 @@ impl IssueFile {
                 if self.tags.is_empty() {
                     "[]".to_string()
                 } else {
-                    format!("[{}]", self.tags.join(", "))
+                    // #195: each tag through yaml_scalar, so even a
+                    // hand-edited special-char tag cannot corrupt the
+                    // flow sequence on write.
+                    format!(
+                        "[{}]",
+                        self.tags
+                            .iter()
+                            .map(|t| yaml_scalar(&Value::String(t.clone())))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
                 },
             ),
             ("created", self.created.clone()),
@@ -510,12 +520,19 @@ impl IssueFile {
         self.updated = now.to_string();
     }
 
-    pub fn add_tag(&mut self, tag: &str, now: &str) {
+    pub fn add_tag(&mut self, tag: &str, now: &str) -> Result<()> {
+        // #195: reject unsafe tag values at the mutation point.
+        if !valid_tag(tag) {
+            return Err(Error::Validation(format!(
+                "tag `{tag}` is not valid (allowed: a-z, 0-9, '-', '_'; must start with a letter or digit)"
+            )));
+        }
         if !self.has_tag(tag) {
             self.tags.push(tag.to_string());
             self.front.invalidate();
             self.updated = now.to_string();
         }
+        Ok(())
     }
 
     pub fn remove_tag(&mut self, tag: &str, now: &str) {
@@ -547,6 +564,17 @@ pub struct ReleaseFile {
     pub updated: String,
     pub body: String,
     front: FrontMatter,
+}
+
+/// #195: tag charset — kebab-case lowercase (`needs-review` style), safe as
+/// an unquoted YAML flow-sequence scalar. Mirrors `projects::valid_project_prefix`.
+pub fn valid_tag(tag: &str) -> bool {
+    let mut chars = tag.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit() => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
 /// PoC release id: `v` + semver (e.g. `v1.2.0`). Blocks path traversal.
@@ -750,8 +778,57 @@ mod tests {
         assert!(file.needs_review());
         file.remove_tag(NEEDS_REVIEW, "2026-10-09T10:00:00Z");
         assert!(!file.needs_review());
-        file.add_tag(NEEDS_REVIEW, "2026-10-09T11:00:00Z");
+        file.add_tag(NEEDS_REVIEW, "2026-10-09T11:00:00Z").unwrap();
         assert!(file.needs_review());
+    }
+
+    /// #195 (review Finding 4): unsafe tag values are rejected at the
+    /// mutation point, hand-edited special-char tags still round-trip
+    /// through serialize, and the current constant tag renders
+    /// byte-for-byte unchanged.
+    #[test]
+    fn tag_charset_enforced_and_serialization_safe() {
+        let mut file = IssueFile::new("IAM-1", "T", IssueStatus::Open, "b", "x").unwrap();
+        for bad in [
+            "bad,tag",
+            "x]y",
+            "has: colon",
+            "a b",
+            "",
+            "-leading",
+            "NEEDS-REVIEW",
+            "tag;drop",
+        ] {
+            assert!(
+                file.add_tag(bad, "x").is_err(),
+                "unsafe tag must be rejected: {bad:?}"
+            );
+        }
+        assert!(file.tags.is_empty(), "no unsafe tag was stored");
+        file.add_tag("needs-review", "x").unwrap();
+        file.add_tag("v2_rollout", "x").unwrap();
+        assert_eq!(file.tags, vec!["needs-review", "v2_rollout"]);
+
+        // A hand-edited front matter carrying special-char tags must
+        // serialize safely and re-parse to the same tags.
+        let src = "---\nid: IAM-9\ntitle: T\nstatus: open\ntags: [\"a, b\", \"x]y\"]\ncreated: x\nupdated: x\n---\n\nBody\n";
+        let parsed = IssueFile::parse(src).unwrap();
+        assert_eq!(parsed.tags, vec!["a, b".to_string(), "x]y".to_string()]);
+        let out = parsed.serialize();
+        let reparsed = IssueFile::parse(&out).unwrap();
+        assert_eq!(
+            reparsed.tags, parsed.tags,
+            "round-trip must be lossless: {out}"
+        );
+
+        // Byte-for-byte for the current constant tag.
+        let mut f2 = IssueFile::new("IAM-2", "T", IssueStatus::Open, "b", "x").unwrap();
+        f2.add_tag(NEEDS_REVIEW, "x").unwrap();
+        assert!(
+            f2.serialize().contains("tags: [needs-review]"),
+            "current render unchanged: {}",
+            f2.serialize()
+        );
     }
 
     #[test]

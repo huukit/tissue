@@ -829,7 +829,7 @@ impl Core {
                 }
             }),
         )?;
-        issue.add_tag(NEEDS_REVIEW, change.now);
+        issue.add_tag(NEEDS_REVIEW, change.now)?;
         issue.write_if_unchanged(&issue_path, &expected)?;
         self.repo.commit_all(
             &actor.author,
@@ -892,7 +892,7 @@ impl Core {
                 })?;
                 let (title, body) = (draft.1, draft.2);
                 let mut issue = IssueFile::new(issue_id, &title, IssueStatus::Open, &body, now)?;
-                issue.add_tag(NEEDS_REVIEW, now);
+                issue.add_tag(NEEDS_REVIEW, now)?;
                 issue.remove_tag(NEEDS_REVIEW, now);
                 issue.write(&issue_path)?;
             }
