@@ -727,6 +727,63 @@ fn projects_page_counts_nav_and_prefix_case() {
     );
 }
 
+/// #221: the sidebar project dropdown is fed by GET /api/projects through the
+/// single projectPrefixes() code path — a project with zero issues appears in
+/// the authoritative list (the dropdown's source AND the Projects page), the
+/// served app.js carries the helper and no longer the `prefixes = []` rebase
+/// debris, and dropdown selection filters via applyFilters/projectOf.
+#[test]
+fn sidebar_dropdown_lists_issue_less_projects_221() {
+    let repo = Scratch::new("dropdown-221");
+    assert!(repo
+        .tissue(&["create", "IAM-1", "iam issue", "--body", "b"])
+        .status
+        .success());
+    let server = start_server(&repo);
+    let addr = server.addr;
+
+    // Create a project with zero issues through the GUI write path.
+    let (status, body) = post(
+        &addr,
+        "/api/projects",
+        r#"{"name":"ops","prefix":"OPS","actor":"human:gui"}"#,
+        Some("gui-test-token"),
+    );
+    assert!(status.contains("201"), "create: {status} {body}");
+
+    // The authoritative project list — the dropdown's source and the Projects
+    // page's source — carries the issue-less project next to IAM.
+    let (status, body) = get(&addr, "/api/projects");
+    assert!(status.contains("200"), "{status} {body}");
+    assert!(
+        body.contains("\"prefix\":\"IAM\"") && body.contains("\"prefix\":\"OPS\""),
+        "zero-issue project OPS listed: {body}"
+    );
+
+    // The served dropdown element exists; the served app.js ships the single
+    // projectPrefixes code path and the debris is gone.
+    let (status, html) = get(&addr, "/");
+    assert!(
+        status.contains("200") && html.contains("id=\"project-select\""),
+        "dropdown element in served index.html: {status}"
+    );
+    let (status, js) = get(&addr, "/app.js");
+    assert!(status.contains("200"), "{status}");
+    assert!(
+        js.contains("projectPrefixes") && js.contains("knownProjects"),
+        "single helper + issue-derived fallback ship: app.js"
+    );
+    assert!(
+        !js.contains("prefixes = [];"),
+        "rebase debris removed from served app.js"
+    );
+    // Dropdown selection filters the list (client-side applyFilters path).
+    assert!(
+        js.contains("applyFilters") && js.contains("projectOf"),
+        "dropdown filter path ships: app.js"
+    );
+}
+
 /// #202: the footer version links to the GitHub release-tag page for that
 /// version (from /api/meta), the license links to LICENSE, links are plain
 /// with underline on hover, and the compiled-in fallback links the tag too.

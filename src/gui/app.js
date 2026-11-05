@@ -26,9 +26,6 @@
  * can never inject HTML (acceptance criterion 3, AGENTS.md §5).
  */
 const NEEDS_REVIEW = "needs-review";
-/** #175: the authoritative project list — GET /api/projects (the config
- * mapping), NOT issue-id prefixes: a project with zero issues must still
- * appear in the switcher, and a created project must survive reload. */
 /** #175/#178: the authoritative project list — GET /api/projects (the
  * config mapping), NOT issue-id prefixes: a project with zero issues must
  * still appear in the switcher and on the Projects page. */
@@ -171,28 +168,28 @@ function knownProjects(issues) {
     }
     return [...set].sort();
 }
-/** Populate the project switcher from GET /api/projects (#175: the config
- * mapping is authoritative — a project with no issues yet still shows). */
-/** #175/#178: populate the project switcher from GET /api/projects (the
- * persisted config mapping is authoritative); issue-derived prefixes are
- * unioned in as a fallback so ad-hoc prefixes still filter. */
-async function populateProjectSelect(issues) {
-    const select = document.getElementById("project-select");
-    if (!select)
-        return;
-    const current = select.value;
+/** #221: the single code path for the project switcher's prefix list — GET
+ * /api/projects (the persisted config mapping is authoritative, #175/#178),
+ * unioned with issue-derived prefixes so ad-hoc prefixes still filter; if the
+ * API read fails, issue-derived prefixes are the fallback — never wiped. */
+async function projectPrefixes(issues) {
     let prefixes;
     try {
         prefixes = (await loadProjects()).map((p) => p.prefix);
     }
     catch (_a) {
-        // Fallback if the read fails: derive from issue ids (pre-#175 behavior).
         prefixes = knownProjects(issues);
     }
-    // Union with issue-derived prefixes so ad-hoc prefixes still filter.
-    prefixes = cachedProjects.length ? cachedProjects.map((p) => p.prefix) : await loadProjects().then((ps) => ps.map((p) => p.prefix));
-    prefixes = [];
-    prefixes = [...new Set([...prefixes, ...knownProjects(issues)])].sort();
+    return [...new Set([...prefixes, ...knownProjects(issues)])].sort();
+}
+/** #175/#178/#221: populate the project switcher via projectPrefixes() — a
+ * project with no issues yet still shows. */
+async function populateProjectSelect(issues) {
+    const select = document.getElementById("project-select");
+    if (!select)
+        return;
+    const current = select.value;
+    const prefixes = await projectPrefixes(issues);
     // Rebuild options: "All projects" + one per prefix.
     select.innerHTML =
         `<option value="">All projects</option>` +
