@@ -485,13 +485,27 @@ function renderIssueList() {
     bindNewIssue();
     bindSearch();
 }
-/** Token field (sessionStorage only) + hint text; shown when no token. */
+/** #199: outside Settings, never render a token input — browsers/password
+ *  managers autofill password fields, leaking the token onto every view.
+ *  Masked status chip with Change (→ Settings) / Clear instead. */
 function tokenBarHtml() {
     const has = !!getToken();
     return `<div class="token-bar">
-    <input type="password" id="api-token" class="token-input"
+    ${has
+        ? `<span class="token-hint">API token set (this browser session only)</span>
+         <a class="btn btn-ghost" id="token-change" href="#/settings">Change</a>
+         <button id="token-clear" class="btn btn-ghost">Clear</button>`
+        : `<span class="token-hint">No API token — writes are read-only. <a id="token-change" href="#/settings">Set it on Settings</a></span>`}
+  </div>`;
+}
+/** #199: the token entry field exists ONLY on the Settings page, hardened
+ *  against autofill (autocomplete="new-password", dedicated name). */
+function settingsTokenBarHtml() {
+    const has = !!getToken();
+    return `<div class="token-bar">
+    <input type="password" id="api-token" name="tissue-api-token-entry" class="token-input"
       placeholder="API token (sessionStorage only)" aria-label="API token"
-      autocomplete="off">
+      autocomplete="new-password">
     <button id="token-save" class="btn btn-primary">${has ? "Update token" : "Save token"}</button>
     ${has ? `<button id="token-clear" class="btn btn-ghost">Clear</button>` : ""}
     <span class="token-hint">stored in this browser session only — never sent to disk</span>
@@ -503,6 +517,7 @@ function bindTokenBar() {
     if (save && input) {
         save.addEventListener("click", () => {
             setToken(input.value.trim());
+            input.value = ""; // #199: never leave the token in the field
             void route();
         });
     }
@@ -853,7 +868,7 @@ async function renderSettings() {
         return;
     el.innerHTML = `
     <h2 class="view-title">Settings</h2>
-    ${tokenBarHtml()}
+    ${settingsTokenBarHtml()}
     <div class="settings-box">
       <p class="settings-note">Non-secret parts of <code>.tissue/config.yml</code>.
         The API token is never shown here — set it via <code>TISSUE_API_TOKEN</code>

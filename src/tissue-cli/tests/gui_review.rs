@@ -560,3 +560,47 @@ fn gui_ships_design_pass_controls() {
         "index.html links the design-pass stylesheet (btn-primary markup lives in app.ts templates since #178)"
     );
 }
+
+/// #199: the token entry input exists ONLY in the Settings route markup —
+/// every other view renders a masked chip (no autofillable password field),
+/// and the Settings input is hardened (autocomplete=new-password, name).
+#[test]
+fn token_input_only_on_settings() {
+    let repo = Scratch::new("token-199");
+    let out = repo.tissue(&["create", "IAM-1", "x", "--body", "b"]);
+    assert!(out.status.success(), "{out:?}");
+    let server = start_server(&repo);
+    let addr = server.addr;
+
+    let (status, js) = get(&addr, "/app.js");
+    assert!(status.contains("200"), "{status}");
+    // Exactly one token entry input in the whole app (the Settings one).
+    assert_eq!(
+        js.matches("id=\"api-token\"").count(),
+        1,
+        "one token input total: app.js"
+    );
+    assert!(
+        js.contains("autocomplete=\"new-password\""),
+        "settings token input hardened: app.js"
+    );
+    assert!(
+        js.contains("name=\"tissue-api-token-entry\""),
+        "dedicated field name: app.js"
+    );
+    // Non-settings views: masked chip + Change link to Settings, no input.
+    assert!(
+        js.contains("API token set (this browser session only)"),
+        "masked chip: app.js"
+    );
+    assert!(
+        js.contains("href=\"#/settings\""),
+        "change link to settings: app.js"
+    );
+    // The served shell carries no token field either.
+    let (status, html) = get(&addr, "/");
+    assert!(
+        status.contains("200") && !html.contains("api-token"),
+        "index.html has no token input: {status}"
+    );
+}
