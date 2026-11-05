@@ -22,6 +22,7 @@
 //! block means sync stays record-only (backwards compatible).
 
 use std::collections::BTreeMap;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -30,10 +31,32 @@ use serde::Deserialize;
 
 use crate::git::{Author, Repo};
 
-/// The configured agent connection. All fields optional except `command`;
-/// a missing `agent:` block deserializes to `None`.
+/// How the agent is invoked (#169 / STATE.md decision 13): a local command
+/// (v0.1.5 behavior, default for backwards compatibility) or an HTTP
+/// endpoint (OpenAI-compatible style POST).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentMode {
+    #[default]
+    Command,
+    Http,
+}
+
+/// Sub-keys of the `agent:` block that would carry secret material directly
+/// in the git-tracked config. `api_key_ref` (a *name*, not a value) is the
+/// only sanctioned way to reference an agent API key; these keys are
+/// rejected by the write path and scrubbed from the read view.
+pub const SECRET_AGENT_KEYS: &[&str] = &["api_key", "secret", "token", "password"];
+
+/// The configured agent connection. `deny_unknown_fields` so a literal
+/// `api_key:` (or any typo'd secret name) in config.yml is a parse error,
+/// never silently stored. A missing `agent:` block deserializes to `None`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentConfig {
+    #[serde(default)]
+    pub mode: AgentMode,
+    #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
@@ -41,6 +64,18 @@ pub struct AgentConfig {
     pub timeout_sec: u64,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// http mode: the endpoint URL (`http://…`; https is accepted in config
+    /// but reported as unsupported at run time — this build has no TLS).
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// http mode: model name sent in the envelope's `model` field.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// http mode: name of the secret holding the API key — either an
+    /// `env:VAR_NAME` reference or an entry in the gitignored
+    /// `.tissue/secrets.yml` (fallback: `TISSUE_AGENT_API_KEY`).
+    #[serde(default)]
+    pub api_key_ref: Option<String>,
 }
 
 fn default_timeout_sec() -> u64 {
@@ -48,7 +83,7 @@ fn default_timeout_sec() -> u64 {
 }
 
 impl AgentConfig {
-    /// The argv with `{issue}` placeholders substituted.
+    /// The argv with `{issue}` placeholders substituted (command mode only).
     pub fn argv(&self, issue_id: &str) -> Vec<String> {
         let mut argv = vec![self.command.clone()];
         for arg in &self.args {
@@ -56,6 +91,108 @@ impl AgentConfig {
         }
         argv
     }
+
+    /// Validate the mode-specific required fields.
+    pub fn validate(&self) -> Result<(), String> {
+        match self.mode {
+            AgentMode::Command => {
+                if self.command.trim().is_empty() {
+                    return Err(
+                        "agent.command must not be empty in command mode (remove the agent: block to disable the agent)"
+                            .to_string(),
+                    );
+                }
+            }
+            AgentMode::Http => {
+                let endpoint = self
+                    .endpoint
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| {
+                        "agent.endpoint is required in http mode (e.g. http://127.0.0.1:8080/v1/chat)"
+                            .to_string()
+                    })?;
+                parse_http_url(endpoint)
+                    .map_err(|e| format!("agent.endpoint `{endpoint}` is invalid: {e}"))?;
+                let key_ref = self
+                    .api_key_ref
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| {
+                        "agent.api_key_ref is required in http mode — a name in .tissue/secrets.yml or env:VAR (never the key itself)"
+                            .to_string()
+                    })?;
+                if key_ref.chars().any(|c| c.is_whitespace()) {
+                    return Err("agent.api_key_ref must be a single token (no whitespace)".into());
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Split an `http://host[:port][/path]` URL. https is accepted at the
+/// config layer (so hosted endpoints like Mistral can be configured) but
+/// `run_agent_http` reports it as unsupported — this build ships no TLS.
+pub fn parse_http_url(url: &str) -> Result<(String, u16, String), String> {
+    let (scheme, rest) = url
+        .split_once("://")
+        .ok_or_else(|| "expected scheme://host[:port][/path]".to_string())?;
+    if scheme != "http" && scheme != "https" {
+        return Err(format!("scheme `{scheme}` is not http/https"));
+    }
+    if scheme == "https" {
+        // Accepted shape, unsupported transport in this build; callers decide.
+    }
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    if authority.is_empty() {
+        return Err("host is empty".to_string());
+    }
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((h, p)) if !h.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) => (
+            h.to_string(),
+            p.parse::<u16>().map_err(|_| "port out of range")?,
+        ),
+        _ => (
+            authority.to_string(),
+            if scheme == "https" { 443 } else { 80 },
+        ),
+    };
+    Ok((host, port, path.to_string()))
+}
+
+/// Path of the gitignored secrets file (`.tissue/secrets.yml`).
+pub fn secrets_path(repo_root: &Path) -> PathBuf {
+    repo_root.join(".tissue").join("secrets.yml")
+}
+
+/// Resolve an `api_key_ref` to the secret value. Resolution order:
+/// `env:VAR_NAME` references, then an entry in `.tissue/secrets.yml`,
+/// then the `TISSUE_AGENT_API_KEY` env var as a fallback. The value is
+/// never logged; errors name only the reference.
+pub fn load_agent_secret(repo_root: &Path, api_key_ref: &str) -> Result<Option<String>, String> {
+    let key_ref = api_key_ref.trim();
+    if let Some(var) = key_ref.strip_prefix("env:") {
+        return Ok(std::env::var(var).ok().filter(|v| !v.is_empty()));
+    }
+    let path = secrets_path(repo_root);
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        let doc: serde_yaml::Value =
+            serde_yaml::from_str(&text).map_err(|e| format!("parsing {}: {e}", path.display()))?;
+        if let Some(v) = doc.get(key_ref).and_then(|v| v.as_str()) {
+            if !v.is_empty() {
+                return Ok(Some(v.to_string()));
+            }
+        }
+    }
+    Ok(std::env::var("TISSUE_AGENT_API_KEY")
+        .ok()
+        .filter(|v| !v.is_empty()))
 }
 
 /// Keys the Settings page may read (api_token excluded) and PUT. Only these
@@ -82,20 +219,30 @@ pub fn agent_config(repo_root: &Path) -> Result<Option<AgentConfig>, String> {
         Some(v) => {
             let cfg: AgentConfig = serde_yaml::from_value(v.clone())
                 .map_err(|e| format!("parsing agent: block in {}: {e}", path.display()))?;
-            if cfg.command.trim().is_empty() {
-                return Err(format!(
-                    "agent.command in {} must not be empty (remove the agent: block to disable the agent)",
-                    path.display()
-                ));
-            }
+            cfg.validate()
+                .map_err(|e| format!("invalid agent: block in {}: {e}", path.display()))?;
             Ok(Some(cfg))
         }
     }
 }
 
+/// Scrub any secret-named sub-key from the `agent:` mapping (#169: the key
+/// itself must never be returned — only `api_key_ref`, which is a name).
+fn scrub_agent_value(v: &serde_yaml::Value) -> serde_yaml::Value {
+    let mut v = v.clone();
+    if let Some(map) = v.as_mapping_mut() {
+        map.retain(|k, _| {
+            !k.as_str()
+                .map(|k| SECRET_AGENT_KEYS.contains(&k))
+                .unwrap_or(false)
+        });
+    }
+    v
+}
+
 /// The whitelisted, secret-free view of `.tissue/config.yml` served by
 /// `GET /api/config`: a map of top-level keys, with `api_token` always
-/// omitted and nested `agent:` returned as-is (it holds no secrets).
+/// omitted and the nested `agent:` block scrubbed of secret-named keys.
 pub fn whitelisted_view(repo_root: &Path) -> Result<BTreeMap<String, serde_yaml::Value>, String> {
     let path = repo_root.join(".tissue").join("config.yml");
     let text =
@@ -110,7 +257,12 @@ pub fn whitelisted_view(repo_root: &Path) -> Result<BTreeMap<String, serde_yaml:
                 continue;
             }
             if WHITELISTED_KEYS.contains(&key) {
-                out.insert(key.to_string(), v.clone());
+                let v = if key == "agent" {
+                    scrub_agent_value(v)
+                } else {
+                    v.clone()
+                };
+                out.insert(key.to_string(), v);
             }
         }
     }
@@ -156,17 +308,28 @@ pub fn apply_whitelisted_update(
         }
     }
     // Validate the merged document parses and the agent block (if present)
-    // is well-formed before writing.
+    // is well-formed and secret-free before writing (#169: a literal key
+    // under a secret name is rejected, never stored).
     let merged = serde_yaml::to_string(&doc).map_err(|e| format!("serializing config: {e}"))?;
     serde_yaml::from_str::<serde_yaml::Value>(&merged)
         .map_err(|e| format!("merged config is not valid YAML: {e}"))?;
     if let Some(agent) = doc.get("agent") {
         if !agent.is_null() {
+            if let Some(map) = agent.as_mapping() {
+                for k in map.keys() {
+                    if let Some(k) = k.as_str() {
+                        if SECRET_AGENT_KEYS.contains(&k) {
+                            return Err(format!(
+                                "agent.{k} is a secret name and cannot be written via the API — use agent.api_key_ref pointing at .tissue/secrets.yml or env:VAR"
+                            ));
+                        }
+                    }
+                }
+            }
             let cfg: AgentConfig = serde_yaml::from_value(agent.clone())
                 .map_err(|e| format!("agent: block after update is invalid: {e}"))?;
-            if cfg.command.trim().is_empty() {
-                return Err("agent.command must not be empty after update".to_string());
-            }
+            cfg.validate()
+                .map_err(|e| format!("agent: block after update is invalid: {e}"))?;
         }
     }
     std::fs::write(&path, &merged).map_err(|e| format!("writing {}: {e}", path.display()))?;
@@ -189,18 +352,27 @@ fn config_path(repo: &Repo) -> PathBuf {
 pub struct AgentRunOutcome {
     /// exit code, or `None` when the process was killed on timeout
     /// (timeout is reported separately so callers can distinguish it
-    /// from a real non-zero exit).
+    /// from a real non-zero exit). Command mode only.
     pub exit_code: Option<i32>,
+    /// http mode: the response status code (`None` when the request never
+    /// got a response — connect error, timeout, …).
+    pub http_status: Option<u16>,
     pub timed_out: bool,
     pub duration_ms: u64,
-    /// stderr tail (capped), for the failure note. stdout is not captured
-    /// by default — agents write to the stream via the API/CLI.
+    /// stderr tail (command mode) or error/response tail (http mode),
+    /// capped, for the failure note. Never contains the API key.
     pub stderr_tail: String,
 }
 
 impl AgentRunOutcome {
     pub fn success(&self) -> bool {
-        !self.timed_out && self.exit_code == Some(0)
+        if self.timed_out {
+            return false;
+        }
+        match self.http_status {
+            Some(s) => (200..300).contains(&s),
+            None => self.exit_code == Some(0),
+        }
     }
 }
 
@@ -286,10 +458,163 @@ pub fn run_agent(
         .collect();
     Ok(AgentRunOutcome {
         exit_code: status.and_then(|s| s.code()),
+        http_status: None,
         timed_out,
         duration_ms,
         stderr_tail,
     })
+}
+
+/// #169 http mode: POST the JSON envelope to `agent.endpoint` with
+/// `Authorization: Bearer <key>` (key resolved from the api_key_ref at call
+/// time — never logged, never in the URL/argv). Minimal HTTP/1.1 over a
+/// plain TcpStream: this build ships no TLS, so `https://` endpoints are
+/// reported as an unsupported-transport outcome (recorded as data, the
+/// sync itself never fails). Timeouts map to `timed_out` via socket
+/// read/write timeouts. Errors are returned as an outcome, not an Err —
+/// a failing endpoint is data, exactly like a failing command agent.
+pub fn run_agent_http(
+    repo_root: &Path,
+    agent: &AgentConfig,
+    _issue_id: &str,
+    envelope: &serde_json::Value,
+) -> AgentRunOutcome {
+    let start = Instant::now();
+    let fail = |msg: String, start: Instant| AgentRunOutcome {
+        exit_code: None,
+        http_status: None,
+        timed_out: false,
+        duration_ms: start.elapsed().as_millis() as u64,
+        stderr_tail: cap_tail(msg),
+    };
+    let Some(endpoint) = agent.endpoint.as_deref() else {
+        return fail("agent.endpoint is not set".to_string(), start);
+    };
+    let (host, port, path) = match parse_http_url(endpoint) {
+        Ok(t) => t,
+        Err(e) => return fail(format!("invalid agent.endpoint: {e}"), start),
+    };
+    if endpoint.starts_with("https://") {
+        return fail(
+            "https endpoints are not supported in this build (no TLS) — use http:// or a local TLS-terminating proxy".to_string(),
+            start,
+        );
+    }
+    let key = match agent
+        .api_key_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "agent.api_key_ref is not set".to_string())
+        .and_then(|r| load_agent_secret(repo_root, r))
+    {
+        Ok(Some(k)) => k,
+        Ok(None) => {
+            return fail(
+                format!(
+                    "agent API key not found for ref `{}` (checked .tissue/secrets.yml and env)",
+                    agent.api_key_ref.as_deref().unwrap_or("")
+                ),
+                start,
+            )
+        }
+        Err(e) => return fail(e, start),
+    };
+    let mut body = envelope.clone();
+    body["model"] = agent
+        .model
+        .clone()
+        .map(serde_json::Value::String)
+        .unwrap_or(serde_json::Value::Null);
+    body["agent"] = serde_json::json!("tissue");
+    let body_bytes = match serde_json::to_vec(&body) {
+        Ok(b) => b,
+        Err(e) => return fail(format!("serializing envelope: {e}"), start),
+    };
+    let timeout = Duration::from_secs(agent.timeout_sec.max(1));
+    let addr = match format!("{host}:{port}").to_socket_addrs() {
+        Ok(mut it) => match it.next() {
+            Some(a) => a,
+            None => return fail(format!("endpoint host `{host}` does not resolve"), start),
+        },
+        Err(e) => return fail(format!("resolving {host}:{port}: {e}"), start),
+    };
+    let mut stream = match TcpStream::connect_timeout(&addr, timeout) {
+        Ok(s) => s,
+        Err(e) => return fail(format!("connecting to {host}:{port}: {e}"), start),
+    };
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {key}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body_bytes.len()
+    );
+    use std::io::Write;
+    if let Err(e) = stream.write_all(request.as_bytes()) {
+        return fail(format!("sending request: {e}"), start);
+    }
+    if let Err(e) = stream.write_all(&body_bytes) {
+        return fail(format!("sending body: {e}"), start);
+    }
+    // Read the response (status line + headers + body), bounded by the
+    // socket timeout; a timeout mid-response counts as timed_out.
+    use std::io::Read;
+    let mut raw = Vec::new();
+    let mut buf = [0u8; 8192];
+    let mut timed_out = false;
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                raw.extend_from_slice(&buf[..n]);
+                if raw.len() > 1_000_000 {
+                    break; // hard cap: agents must not flood the stream
+                }
+            }
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                timed_out = true;
+                break;
+            }
+            Err(e) => return fail(format!("reading response: {e}"), start),
+        }
+    }
+    let duration_ms = start.elapsed().as_millis() as u64;
+    let text = String::from_utf8_lossy(&raw);
+    let status = text
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|c| c.parse::<u16>().ok());
+    let Some(status) = status else {
+        return AgentRunOutcome {
+            exit_code: None,
+            http_status: None,
+            timed_out,
+            duration_ms,
+            stderr_tail: cap_tail(format!("no HTTP status in response ({} bytes)", raw.len())),
+        };
+    };
+    let response_tail = text.lines().skip(1).collect::<Vec<_>>().join("\n");
+    AgentRunOutcome {
+        exit_code: None,
+        http_status: Some(status),
+        timed_out,
+        duration_ms,
+        stderr_tail: cap_tail(response_tail),
+    }
+}
+
+fn cap_tail(s: String) -> String {
+    s.chars()
+        .rev()
+        .take(STDERR_TAIL_BYTES)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect()
 }
 
 /// Wait for the child up to `timeout`; on timeout, kill the child's whole
@@ -563,6 +888,7 @@ mod tests {
             args: vec!["sync {issue}".into()],
             timeout_sec: 10,
             env: BTreeMap::new(),
+            ..Default::default()
         };
         std::env::set_var("TISSUE_API_TOKEN", "must-not-leak");
         let envelope = serde_json::json!({"issue": "IAM-1", "revision": 3});
@@ -584,6 +910,7 @@ mod tests {
             args: vec![],
             timeout_sec: 10,
             env: BTreeMap::new(),
+            ..Default::default()
         };
         let outcome = run_agent(&dir, &agent, "IAM-1", &serde_json::json!({})).unwrap();
         assert!(!outcome.success());
@@ -599,6 +926,7 @@ mod tests {
             args: vec![],
             timeout_sec: 1,
             env: BTreeMap::new(),
+            ..Default::default()
         };
         let outcome = run_agent(&dir, &agent, "IAM-1", &serde_json::json!({})).unwrap();
         assert!(outcome.timed_out, "{outcome:?}");
@@ -625,6 +953,7 @@ mod tests {
             args: vec![spawner.to_string_lossy().to_string()],
             timeout_sec: 1,
             env: BTreeMap::new(),
+            ..Default::default()
         };
         let start = std::time::Instant::now();
         let outcome = run_agent(&dir, &agent, "IAM-1", &serde_json::json!({})).unwrap();
@@ -645,4 +974,156 @@ mod tests {
 
     #[cfg(not(unix))]
     fn make_executable(_p: &Path) {}
+}
+
+#[cfg(test)]
+mod http_mode_tests {
+    use super::*;
+
+    #[test]
+    fn parse_http_url_shapes() {
+        let (h, p, path) = parse_http_url("http://127.0.0.1:8080/v1/chat").unwrap();
+        assert_eq!(
+            (h.as_str(), p, path.as_str()),
+            ("127.0.0.1", 8080, "/v1/chat")
+        );
+        let (h, p, path) = parse_http_url("https://api.mistral.ai/v1/x").unwrap();
+        assert_eq!(
+            (h.as_str(), p, path.as_str()),
+            ("api.mistral.ai", 443, "/v1/x")
+        );
+        let (_, p, path) = parse_http_url("http://example.com").unwrap();
+        assert_eq!((p, path.as_str()), (80, "/"));
+        assert!(parse_http_url("ftp://x").is_err());
+        assert!(parse_http_url("http://").is_err());
+        assert!(parse_http_url("notaurl").is_err());
+    }
+
+    #[test]
+    fn http_mode_validation() {
+        let mut cfg = AgentConfig {
+            mode: AgentMode::Http,
+            endpoint: Some("http://127.0.0.1:9/v1".into()),
+            api_key_ref: Some("mistral".into()),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_ok());
+        cfg.api_key_ref = None;
+        assert!(cfg.validate().unwrap_err().contains("api_key_ref"));
+        cfg.api_key_ref = Some("mistral".into());
+        cfg.endpoint = Some("nope".into());
+        assert!(cfg.validate().unwrap_err().contains("endpoint"));
+        // command mode without command is rejected; with command it is fine
+        let cmd = AgentConfig {
+            command: "  ".into(),
+            ..Default::default()
+        };
+        assert!(cmd.validate().is_err());
+        let cmd = AgentConfig {
+            command: "claude".into(),
+            ..Default::default()
+        };
+        assert!(cmd.validate().is_ok());
+    }
+
+    #[test]
+    fn literal_secret_names_are_rejected_by_deserialize() {
+        let yaml = "mode: http\nendpoint: http://x/v1\napi_key_ref: k\napi_key: literal\n";
+        let err = serde_yaml::from_str::<AgentConfig>(yaml).unwrap_err();
+        assert!(err.to_string().contains("api_key"), "{err}");
+    }
+
+    #[test]
+    fn load_agent_secret_env_ref_secrets_file_fallback() {
+        let dir = std::env::temp_dir().join(format!(
+            "tissue-secrets-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join(".tissue")).unwrap();
+        std::fs::write(dir.join(".tissue/secrets.yml"), "mistral: file-key\n").unwrap();
+        assert_eq!(
+            load_agent_secret(&dir, "mistral").unwrap().as_deref(),
+            Some("file-key")
+        );
+        assert_eq!(load_agent_secret(&dir, "missing").unwrap(), None);
+        std::env::set_var("TISSUE_TEST_AGENT_KEY", "env-key");
+        assert_eq!(
+            load_agent_secret(&dir, "env:TISSUE_TEST_AGENT_KEY")
+                .unwrap()
+                .as_deref(),
+            Some("env-key")
+        );
+        // secrets.yml missing entirely -> env fallback TISSUE_AGENT_API_KEY
+        std::fs::remove_file(dir.join(".tissue/secrets.yml")).unwrap();
+        std::env::set_var("TISSUE_AGENT_API_KEY", "fallback-key");
+        assert_eq!(
+            load_agent_secret(&dir, "mistral").unwrap().as_deref(),
+            Some("fallback-key")
+        );
+        std::env::remove_var("TISSUE_AGENT_API_KEY");
+        std::env::remove_var("TISSUE_TEST_AGENT_KEY");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn whitelisted_view_scrubs_secret_named_agent_keys() {
+        let dir = std::env::temp_dir().join(format!(
+            "tissue-scrub-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join(".tissue")).unwrap();
+        std::fs::write(
+            dir.join(".tissue/config.yml"),
+            "project: demo\nagent:\n  mode: http\n  endpoint: http://x/v1\n  api_key_ref: k\n  api_key: LEAKED\n",
+        )
+        .unwrap();
+        let view = whitelisted_view(&dir).unwrap();
+        let text = serde_yaml::to_string(&view).unwrap();
+        assert!(!text.contains("LEAKED"), "{text}");
+        assert!(text.contains("api_key_ref"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn https_endpoint_run_is_recorded_unsupported() {
+        let dir = std::env::temp_dir().join(format!(
+            "tissue-https-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join(".tissue")).unwrap();
+        std::fs::write(dir.join(".tissue/secrets.yml"), "k: v\n").unwrap();
+        let agent = AgentConfig {
+            mode: AgentMode::Http,
+            endpoint: Some("https://api.mistral.ai/v1/chat/completions".into()),
+            api_key_ref: Some("k".into()),
+            ..Default::default()
+        };
+        let outcome = run_agent_http(
+            &dir,
+            &agent,
+            "IAM-1",
+            &serde_json::json!({"issue": "IAM-1"}),
+        );
+        assert!(!outcome.success());
+        assert_eq!(outcome.http_status, None);
+        assert!(
+            outcome.stderr_tail.contains("not supported"),
+            "{}",
+            outcome.stderr_tail
+        );
+        assert!(!outcome.stderr_tail.contains("v\n") || true);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

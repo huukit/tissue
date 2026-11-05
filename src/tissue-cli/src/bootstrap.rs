@@ -146,6 +146,22 @@ fn init_issue_repo(
         .commit_all_if_changed(&tissue_author(), "tissue init: config.yml")
         .map_err(|e| format!("committing config.yml: {e}"))?;
 
+    // #169: the secrets file must never be committed — make sure the issue
+    // repo's .gitignore ignores `.tissue/secrets.yml` (append if a
+    // .gitignore already exists, create otherwise).
+    let gitignore_path = root.join(".gitignore");
+    let mut gi = std::fs::read_to_string(&gitignore_path).unwrap_or_default();
+    if !gi.lines().any(|l| l.trim() == ".tissue/secrets.yml") {
+        if !gi.is_empty() && !gi.ends_with('\n') {
+            gi.push('\n');
+        }
+        gi.push_str("# tissue: agent API keys and other secrets live here, never in git (#169)\n.tissue/secrets.yml\n");
+        std::fs::write(&gitignore_path, gi).map_err(|e| format!("writing .gitignore: {e}"))?;
+        grepo
+            .commit_all_if_changed(&tissue_author(), "tissue init: gitignore secrets.yml")
+            .map_err(|e| format!("committing .gitignore: {e}"))?;
+    }
+
     if let Some(remote_path) = remote {
         set_filesystem_remote(&grepo, remote_path)?;
     }

@@ -450,3 +450,13 @@ body {
   border-top: 1px solid var(--border);
 }
 .app-footer a { color: var(--accent); }
+
+/* #169: write-only API key field with show/hide toggle on Settings. */
+.key-field {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+.key-field input {
+  flex: 1;
+}

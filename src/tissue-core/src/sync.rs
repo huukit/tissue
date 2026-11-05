@@ -481,8 +481,41 @@ impl Core {
                 .unwrap_or(serde_json::Value::Null),
             "stream_tail": records.iter().rev().take(10).cloned().collect::<Vec<_>>(),
         });
-        let outcome =
-            config::run_agent(self.repo.root(), &agent, issue_id, &envelope).map_err(Error::Io)?;
+        // #169: command mode spawns the configured command; http mode POSTs
+        // the envelope to the configured endpoint with the bearer key
+        // (resolved from api_key_ref at call time, never recorded).
+        let outcome = match agent.mode {
+            config::AgentMode::Command => {
+                config::run_agent(self.repo.root(), &agent, issue_id, &envelope)
+                    .map_err(Error::Io)?
+            }
+            config::AgentMode::Http => {
+                config::run_agent_http(self.repo.root(), &agent, issue_id, &envelope)
+            }
+        };
+        let run_data = match agent.mode {
+            config::AgentMode::Command => json!({
+                "issue": issue_id,
+                "mode": "command",
+                "command": agent.argv(issue_id).join(" "),
+                "exit_code": outcome.exit_code,
+                "http_status": outcome.http_status,
+                "timed_out": outcome.timed_out,
+                "duration_ms": outcome.duration_ms,
+                "stderr_tail": outcome.stderr_tail,
+            }),
+            config::AgentMode::Http => json!({
+                "issue": issue_id,
+                "mode": "http",
+                "endpoint": agent.endpoint,
+                "model": agent.model,
+                "exit_code": outcome.exit_code,
+                "http_status": outcome.http_status,
+                "timed_out": outcome.timed_out,
+                "duration_ms": outcome.duration_ms,
+                "stderr_tail": outcome.stderr_tail,
+            }),
+        };
         self.append_record(
             issue_id,
             json!({
@@ -490,14 +523,7 @@ impl Core {
                 "ts": now,
                 "actor": "tissue-core",
                 "refs": [],
-                "data": {
-                    "issue": issue_id,
-                    "command": agent.argv(issue_id).join(" "),
-                    "exit_code": outcome.exit_code,
-                    "timed_out": outcome.timed_out,
-                    "duration_ms": outcome.duration_ms,
-                    "stderr_tail": outcome.stderr_tail,
-                }
+                "data": run_data,
             }),
         )?;
         self.repo

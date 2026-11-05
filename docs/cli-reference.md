@@ -218,10 +218,41 @@ The spawned process always runs with the issue repo as cwd; the API token
 is never in its argv or environment, and nothing is logged from it beyond
 a capped stderr tail in the `agent-run` record.
 
+### HTTP endpoint mode (#169, STATE.md decision 13)
+
+Instead of a local command, the agent can be an HTTP endpoint
+(OpenAI-compatible style). `mode: http` adds `endpoint`, `model`, and
+`api_key_ref`:
+
+```yaml
+agent:
+  mode: http                    # "command" (default, v0.1.5 configs) or "http"
+  endpoint: "http://127.0.0.1:8080/v1/chat/completions"
+  model: "mistral-large-latest" # sent in the envelope's model field
+  api_key_ref: mistral          # a NAME, never the key itself
+  timeout_sec: 120
+```
+
+On sync, tissue POSTs the usual JSON envelope (`issue`, `revision`,
+`summary`, `changes`, `stream_tail`, plus `model`) to the endpoint with
+`Authorization: Bearer <key>`. The key is resolved at call time from, in
+order: an `env:VAR_NAME` reference, an entry in the **gitignored**
+`.tissue/secrets.yml` (e.g. `mistral: "sk-…"`), or the `TISSUE_AGENT_API_KEY`
+env var. The key never appears in `config.yml`, the agent stream, commits,
+or logs. `tissue init` writes a `.gitignore` covering `.tissue/secrets.yml`.
+`PUT /api/config` rejects any literal secret under the `agent:` block
+(e.g. `api_key:`) with 400; `GET /api/config` scrubs secret-named keys, so
+only the reference is ever visible. HTTP failures (401, timeouts,
+connection errors) are recorded as a failed `agent-run` record — the sync
+itself never fails. Note: this build ships no TLS, so `https://` endpoints
+are accepted in config but reported as unsupported at run time — use
+`http://` or a local TLS-terminating proxy.
+
 The same settings are viewable and editable in the GUI under **Settings**
-via `GET /api/config` (whitelisted keys only — `api_token` is never
-returned) and `PUT /api/config` (token-protected; non-whitelisted keys are
-rejected, one commit per change).
+(mode toggle, endpoint/model/key-reference, write-only key field with
+show/hide) via `GET /api/config` (whitelisted keys only — `api_token` is
+never returned) and `PUT /api/config` (token-protected; non-whitelisted
+keys are rejected, one commit per change).
 
 ---
 

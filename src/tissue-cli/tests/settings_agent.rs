@@ -472,3 +472,251 @@ fn api_sync_without_agent_returns_null_outcome() {
     assert!(body.contains("\"agent_run\":null"), "{body}");
     assert!(!repo.agent_stream("IAM-1").contains("agent-run"));
 }
+
+// ---------------------------------------------------------------------------
+// #169: agent HTTP-endpoint mode (STATE.md decision 13) — the key is a
+// secret (secrets.yml / env), never in config or the stream; sync POSTs the
+// envelope with the bearer header and records the outcome as data.
+// ---------------------------------------------------------------------------
+
+/// Mock agent endpoint: accepts exactly one HTTP request, captures the raw
+/// request (head + body), and replies with the given status/body.
+fn mock_agent_endpoint(
+    status: &str,
+    resp_body: &str,
+) -> (SocketAddr, std::thread::JoinHandle<String>) {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind mock");
+    let addr = listener.local_addr().expect("addr");
+    let status = status.to_string();
+    let resp_body = resp_body.to_string();
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+        let mut raw = String::new();
+        let mut content_length = 0usize;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("read line");
+            if line.trim().is_empty() {
+                break;
+            }
+            if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                content_length = v.trim().parse().unwrap_or(0);
+            }
+            raw.push_str(&line);
+        }
+        let mut body = vec![0u8; content_length];
+        reader.read_exact(&mut body).expect("read body");
+        raw.push_str(&String::from_utf8_lossy(&body));
+        let resp = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{resp_body}",
+            resp_body.len()
+        );
+        stream.write_all(resp.as_bytes()).expect("write resp");
+        raw
+    });
+    (addr, handle)
+}
+
+fn write_secrets(repo: &Scratch, content: &str) {
+    std::fs::write(repo.root.join(".tissue/secrets.yml"), content).expect("write secrets.yml");
+}
+
+/// #169 AC: http mode POSTs the JSON envelope with the bearer key resolved
+/// from the gitignored .tissue/secrets.yml; outcome recorded; key never in
+/// config, stream, or git.
+#[test]
+fn http_mode_sync_posts_envelope_with_bearer_key() {
+    let repo = Scratch::new("http-sync");
+    let (addr, mock) = mock_agent_endpoint("200 OK", "{\"ok\":true}");
+    write_secrets(&repo, "mistral: \"test-agent-key-123\"\n");
+    assert_eq!(
+        repo.git(&["check-ignore", ".tissue/secrets.yml"]).trim(),
+        ".tissue/secrets.yml",
+        "secrets.yml is gitignored from init"
+    );
+    repo.set_config(&format!(
+        "agent:\n  mode: http\n  endpoint: \"http://{addr}/v1/chat/completions\"\n  model: \"mistral-large-latest\"\n  api_key_ref: mistral\n  timeout_sec: 10\n"
+    ));
+    let out = repo.tissue(&["sync", "IAM-1", "--summary", "human edit"]);
+    assert!(out.status.success(), "sync failed: {out:?}");
+    let request = mock.join().expect("mock served one request");
+    assert!(
+        request.starts_with("POST /v1/chat/completions HTTP/1.1"),
+        "request line: {request}"
+    );
+    assert!(
+        request.contains("Authorization: Bearer test-agent-key-123"),
+        "bearer header: {request}"
+    );
+    assert!(
+        request.contains("\"issue\":\"IAM-1\""),
+        "envelope: {request}"
+    );
+    assert!(
+        request.contains("\"model\":\"mistral-large-latest\""),
+        "model in envelope: {request}"
+    );
+    let stream = repo.agent_stream("IAM-1");
+    assert!(stream.contains("\"type\":\"agent-run\""), "{stream}");
+    assert!(stream.contains("\"mode\":\"http\""), "{stream}");
+    assert!(stream.contains("\"http_status\":200"), "{stream}");
+    assert!(
+        !stream.contains("test-agent-key-123"),
+        "key never recorded: {stream}"
+    );
+    let cfg = repo.config_yml();
+    assert!(!cfg.contains("test-agent-key-123"), "config clean: {cfg}");
+    assert!(
+        !repo.git(&["ls-files"]).contains("secrets.yml"),
+        "secrets.yml never committed"
+    );
+}
+
+/// #169: a rejected key (401) is recorded as a failed outcome — the sync
+/// itself still succeeds (failures are data).
+#[test]
+fn http_mode_wrong_key_is_recorded_not_fatal() {
+    let repo = Scratch::new("http-401");
+    let (addr, mock) = mock_agent_endpoint("401 Unauthorized", "{\"error\":\"bad key\"}");
+    write_secrets(&repo, "mistral: \"wrong-key\"\n");
+    repo.set_config(&format!(
+        "agent:\n  mode: http\n  endpoint: \"http://{addr}/v1/x\"\n  api_key_ref: mistral\n  timeout_sec: 10\n"
+    ));
+    let out = repo.tissue(&["sync", "IAM-1", "--summary", "edit"]);
+    assert!(out.status.success(), "sync must not fail: {out:?}");
+    let request = mock.join().expect("mock");
+    assert!(
+        request.contains("Authorization: Bearer wrong-key"),
+        "{request}"
+    );
+    let stream = repo.agent_stream("IAM-1");
+    assert!(stream.contains("\"http_status\":401"), "{stream}");
+    assert!(
+        !stream.contains("wrong-key"),
+        "key never recorded: {stream}"
+    );
+}
+
+/// #169: a missing key produces a clear error record naming only the ref.
+#[test]
+fn http_mode_missing_key_records_clear_error() {
+    let repo = Scratch::new("http-nokey");
+    let (addr, _mock) = mock_agent_endpoint("200 OK", "{}");
+    repo.set_config(&format!(
+        "agent:\n  mode: http\n  endpoint: \"http://{addr}/v1/x\"\n  api_key_ref: mistral\n  timeout_sec: 10\n"
+    ));
+    let out = repo.tissue_env(
+        &["sync", "IAM-1", "--summary", "edit"],
+        &[("TISSUE_AGENT_API_KEY", "")],
+    );
+    assert!(out.status.success(), "{out:?}");
+    let stream = repo.agent_stream("IAM-1");
+    assert!(stream.contains("not found"), "clear error: {stream}");
+    assert!(stream.contains("mistral"), "names the ref: {stream}");
+    assert!(!stream.contains("\"http_status\":200"), "{stream}");
+}
+
+/// #169: https endpoints are configurable but reported unsupported at run
+/// time (this build has no TLS) — recorded as data, sync still succeeds.
+#[test]
+fn http_mode_https_endpoint_recorded_as_unsupported() {
+    let repo = Scratch::new("http-https");
+    write_secrets(&repo, "k: v\n");
+    repo.set_config(
+        "agent:\n  mode: http\n  endpoint: \"https://api.mistral.ai/v1/chat/completions\"\n  api_key_ref: k\n  timeout_sec: 5\n",
+    );
+    let out = repo.tissue(&["sync", "IAM-1", "--summary", "edit"]);
+    assert!(out.status.success(), "{out:?}");
+    let stream = repo.agent_stream("IAM-1");
+    assert!(stream.contains("not supported"), "{stream}");
+}
+
+/// #169 AC2: GET /api/config never returns key material (only the ref);
+/// PUT /api/config rejects a literal secret under the agent block; a valid
+/// http-mode block stores just the reference. One commit per PUT.
+#[test]
+fn config_api_never_leaks_agent_key_and_rejects_secret_names() {
+    let repo = Scratch::new("cfg-secret");
+    repo.set_token("tok-cfg");
+    write_secrets(&repo, "mistral: \"super-secret-agent-key\"\n");
+    repo.set_config(
+        "agent:\n  mode: http\n  endpoint: \"http://127.0.0.1:9/v1/x\"\n  api_key_ref: mistral\n  timeout_sec: 10\n",
+    );
+    let server = start_server(&repo);
+    let addr = &server.addr;
+
+    let (status, body) = get(addr, "/api/config");
+    assert!(status.contains("200"), "{status} {body}");
+    assert!(body.contains("api_key_ref"), "{body}");
+    assert!(
+        !body.contains("super-secret-agent-key"),
+        "no key material: {body}"
+    );
+
+    let before = repo.commit_count();
+    let (status, body) = put(
+        addr,
+        "/api/config",
+        "{\"agent\":{\"mode\":\"http\",\"endpoint\":\"http://127.0.0.1:9/v1/x\",\"api_key_ref\":\"mistral\",\"api_key\":\"literal-key\"},\"actor\":\"human:gui\"}",
+        Some("tok-cfg"),
+    );
+    assert!(
+        status.contains("400"),
+        "literal key rejected: {status} {body}"
+    );
+    assert!(body.contains("secret"), "{body}");
+    assert!(!repo.config_yml().contains("literal-key"), "not stored");
+    assert_eq!(repo.commit_count(), before, "rejected PUT commits nothing");
+
+    let (status, body) = put(
+        addr,
+        "/api/config",
+        "{\"agent\":{\"mode\":\"http\",\"endpoint\":\"http://127.0.0.1:9/v1/x\",\"model\":\"m\",\"api_key_ref\":\"mistral\",\"timeout_sec\":10},\"actor\":\"human:gui\"}",
+        Some("tok-cfg"),
+    );
+    assert!(status.contains("200"), "{status} {body}");
+    assert_eq!(
+        repo.commit_count(),
+        before + 1,
+        "one commit per accepted PUT"
+    );
+    let cfg = repo.config_yml();
+    assert!(cfg.contains("api_key_ref: mistral"), "{cfg}");
+    assert!(cfg.contains("mode: http"), "{cfg}");
+    assert!(!cfg.contains("super-secret-agent-key"), "{cfg}");
+
+    // And the read view after the update still leaks nothing.
+    let (status, body) = get(addr, "/api/config");
+    assert!(status.contains("200"));
+    assert!(!body.contains("super-secret-agent-key"), "{body}");
+}
+
+/// #169: `tissue init` writes a .gitignore covering .tissue/secrets.yml.
+#[test]
+fn init_gitignores_secrets_file() {
+    let repo = Scratch::new("init-gitignore");
+    let gi = std::fs::read_to_string(repo.root.join(".gitignore")).expect(".gitignore at init");
+    assert!(gi.contains(".tissue/secrets.yml"), "{gi}");
+    assert_eq!(
+        repo.git(&["check-ignore", ".tissue/secrets.yml"]).trim(),
+        ".tissue/secrets.yml"
+    );
+}
+
+/// #169 backwards compat: a v0.1.5 command-mode config (no `mode:` key)
+/// still parses, validates, and runs.
+#[test]
+fn v015_command_mode_config_still_works() {
+    let repo = Scratch::new("v015-compat");
+    let stub = write_stub_agent(&repo.root, "stub3.sh", "cat >/dev/null");
+    repo.set_config(&format!(
+        "agent:\n  command: \"{}\"\n  args: [\"sync {{issue}}\"]\n  timeout_sec: 30\n",
+        stub.display()
+    ));
+    let out = repo.tissue(&["sync", "IAM-1", "--summary", "legacy config"]);
+    assert!(out.status.success(), "{out:?}");
+    let stream = repo.agent_stream("IAM-1");
+    assert!(stream.contains("\"mode\":\"command\""), "{stream}");
+    assert!(stream.contains("\"exit_code\":0"), "{stream}");
+}

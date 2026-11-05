@@ -76,15 +76,21 @@ interface StreamRecord {
   data: { type?: string; [k: string]: unknown };
 }
 
-/** #137: whitelisted view of .tissue/config.yml as served by GET /api/config. */
+/** #137/#169: whitelisted view of .tissue/config.yml as served by
+ * GET /api/config. The agent block never contains key material — only
+ * `api_key_ref` (a name); secret-named sub-keys are scrubbed server-side. */
 interface ConfigView {
   project?: string;
   remote?: string;
   agent?: {
-    command: string;
+    mode?: "command" | "http";
+    command?: string;
     args?: string[];
     timeout_sec?: number;
     env?: Record<string, string>;
+    endpoint?: string;
+    model?: string;
+    api_key_ref?: string;
   };
   [k: string]: unknown;
 }
@@ -796,6 +802,11 @@ async function renderReleaseDetail(id: string): Promise<void> {
 /** #137: the Settings view — whitelisted config (agent block, project,
  * remote) with token-authed editing via PUT /api/config. `api_token` is
  * never fetched, displayed, or accepted by the API. */
+/** #137/#169: the Settings view — whitelisted config with a mode-aware
+ * agent form (local command or HTTP endpoint). `api_token` and agent key
+ * material are never fetched, displayed, or accepted by the API: the key
+ * field is write-only and only ever used to print a one-time hint for
+ * `.tissue/secrets.yml` / env — the API stores just the `api_key_ref`. */
 async function renderSettings(): Promise<void> {
   const el = app();
   if (!el) return;
@@ -806,12 +817,38 @@ async function renderSettings(): Promise<void> {
       <p class="settings-note">Non-secret parts of <code>.tissue/config.yml</code>.
         The API token is never shown here — set it via <code>TISSUE_API_TOKEN</code>
         or the <code>api_token:</code> line in the repo (env var recommended).</p>
-      <label>Agent command
-        <input id="cfg-agent-command" type="text" placeholder="e.g. claude (empty = sync stays record-only)">
+      <label>Agent mode
+        <select id="cfg-agent-mode" aria-label="Agent mode">
+          <option value="none">None (sync stays record-only)</option>
+          <option value="command">Local command</option>
+          <option value="http">HTTP endpoint</option>
+        </select>
       </label>
-      <label>Agent args (one per line; <code>{issue}</code> is replaced with the issue id)
-        <textarea id="cfg-agent-args" rows="3"></textarea>
-      </label>
+      <div id="cfg-mode-command">
+        <label>Agent command
+          <input id="cfg-agent-command" type="text" placeholder="e.g. claude">
+        </label>
+        <label>Agent args (one per line; <code>{issue}</code> is replaced with the issue id)
+          <textarea id="cfg-agent-args" rows="3"></textarea>
+        </label>
+      </div>
+      <div id="cfg-mode-http" hidden>
+        <label>Endpoint URL
+          <input id="cfg-agent-endpoint" type="text" placeholder="e.g. http://127.0.0.1:8080/v1/chat/completions">
+        </label>
+        <label>Model
+          <input id="cfg-agent-model" type="text" placeholder="e.g. mistral-large-latest">
+        </label>
+        <label>API key reference (<code>api_key_ref</code> — a name, never the key)
+          <input id="cfg-agent-keyref" type="text" placeholder="e.g. mistral  or  env:TISSUE_AGENT_API_KEY">
+        </label>
+        <label>API key (write-only — never stored in config or sent to the API)
+          <span class="key-field">
+            <input id="cfg-agent-key" type="password" autocomplete="off" placeholder="only needed once, to fill secrets.yml">
+            <button id="cfg-agent-key-toggle" type="button" class="btn btn-ghost">Show</button>
+          </span>
+        </label>
+      </div>
       <label>Agent timeout (seconds)
         <input id="cfg-agent-timeout" type="number" min="1" step="1">
       </label>
@@ -831,40 +868,90 @@ async function renderSettings(): Promise<void> {
     document.getElementById("cfg-view")!.textContent = String(e instanceof Error ? e.message : e);
   }
   const agent = cfg.agent;
+  const mode =
+    agent?.mode ?? (agent?.command ? "command" : "none");
+  (document.getElementById("cfg-agent-mode") as HTMLSelectElement).value = mode;
   (document.getElementById("cfg-agent-command") as HTMLInputElement).value = agent?.command ?? "";
   (document.getElementById("cfg-agent-args") as HTMLTextAreaElement).value =
     (agent?.args ?? []).join("\n");
+  (document.getElementById("cfg-agent-endpoint") as HTMLInputElement).value = agent?.endpoint ?? "";
+  (document.getElementById("cfg-agent-model") as HTMLInputElement).value = agent?.model ?? "";
+  (document.getElementById("cfg-agent-keyref") as HTMLInputElement).value = agent?.api_key_ref ?? "";
   (document.getElementById("cfg-agent-timeout") as HTMLInputElement).value =
     String(agent?.timeout_sec ?? 120);
   (document.getElementById("cfg-remote") as HTMLInputElement).value = cfg.remote ?? "";
   document.getElementById("cfg-view")!.textContent = JSON.stringify(cfg, null, 2);
 
+  const syncModeSections = () => {
+    const m = (document.getElementById("cfg-agent-mode") as HTMLSelectElement).value;
+    const cmd = document.getElementById("cfg-mode-command");
+    const http = document.getElementById("cfg-mode-http");
+    if (cmd) cmd.hidden = m !== "command";
+    if (http) http.hidden = m !== "http";
+  };
+  syncModeSections();
+  document.getElementById("cfg-agent-mode")?.addEventListener("change", syncModeSections);
+  const keyInput = document.getElementById("cfg-agent-key") as HTMLInputElement | null;
+  document.getElementById("cfg-agent-key-toggle")?.addEventListener("click", (ev) => {
+    if (!keyInput) return;
+    const show = keyInput.type === "password";
+    keyInput.type = show ? "text" : "password";
+    (ev.target as HTMLButtonElement).textContent = show ? "Hide" : "Show";
+  });
+
   document.getElementById("cfg-save")?.addEventListener("click", async () => {
     const result = document.getElementById("cfg-result");
     if (!result) return;
-    const command = (document.getElementById("cfg-agent-command") as HTMLInputElement).value.trim();
-    const args = (document.getElementById("cfg-agent-args") as HTMLTextAreaElement).value
-      .split("\n")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
+    const mode = (document.getElementById("cfg-agent-mode") as HTMLSelectElement).value;
     const timeoutRaw = (document.getElementById("cfg-agent-timeout") as HTMLInputElement).value.trim();
     const timeout = timeoutRaw ? parseInt(timeoutRaw, 10) : NaN;
     if (timeoutRaw && (!Number.isFinite(timeout) || timeout < 1)) {
       result.textContent = "Timeout must be a positive number of seconds.";
       return;
     }
+    const timeoutSec = timeoutRaw ? timeout : 120;
     const remote = (document.getElementById("cfg-remote") as HTMLInputElement).value.trim();
-    const update: Record<string, unknown> = {
-      remote,
-      agent: command
-        ? { command, args, timeout_sec: timeoutRaw ? timeout : 120 }
-        : null,
-      actor: "human:gui",
-    };
+    let agentUpdate: Record<string, unknown> | null = null;
+    if (mode === "command") {
+      const command = (document.getElementById("cfg-agent-command") as HTMLInputElement).value.trim();
+      if (!command) {
+        result.textContent = "Command mode needs a command (or switch mode to None).";
+        return;
+      }
+      const args = (document.getElementById("cfg-agent-args") as HTMLTextAreaElement).value
+        .split("\n")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      agentUpdate = { mode: "command", command, args, timeout_sec: timeoutSec };
+    } else if (mode === "http") {
+      const endpoint = (document.getElementById("cfg-agent-endpoint") as HTMLInputElement).value.trim();
+      const keyRef = (document.getElementById("cfg-agent-keyref") as HTMLInputElement).value.trim();
+      const model = (document.getElementById("cfg-agent-model") as HTMLInputElement).value.trim();
+      if (!/^https?:\/\/\S+$/.test(endpoint)) {
+        result.textContent = "Endpoint must be an http(s) URL (e.g. http://127.0.0.1:8080/v1/chat/completions).";
+        return;
+      }
+      if (!keyRef || /\s/.test(keyRef)) {
+        result.textContent = "API key reference is required and must be a single token (a secrets.yml name or env:VAR).";
+        return;
+      }
+      agentUpdate = { mode: "http", endpoint, model: model || null, api_key_ref: keyRef, timeout_sec: timeoutSec };
+    }
+    const update: Record<string, unknown> = { remote, agent: agentUpdate, actor: "human:gui" };
     result.textContent = "…";
     try {
       await putJson<{ updated: boolean }>("/api/config", update);
-      result.textContent = "Saved — config updated and committed.";
+      // The key field is write-only: if a key was entered, show the one-time
+      // instruction for storing it outside git — the API never saw it.
+      const keyVal = keyInput?.value.trim() ?? "";
+      if (mode === "http" && keyVal && agentUpdate) {
+        const ref = (agentUpdate as Record<string, unknown>).api_key_ref as string;
+        result.textContent =
+          `Saved — config updated and committed. Store the API key once, outside git: ` +
+          `add \`${esc(ref)}: "…"\` to <code>.tissue/secrets.yml</code> (gitignored), or export it as <code>TISSUE_AGENT_API_KEY</code>.`;
+      } else {
+        result.textContent = "Saved — config updated and committed.";
+      }
       await renderSettings();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

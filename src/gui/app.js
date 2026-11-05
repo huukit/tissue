@@ -676,8 +676,13 @@ async function renderReleaseDetail(id) {
 /** #137: the Settings view — whitelisted config (agent block, project,
  * remote) with token-authed editing via PUT /api/config. `api_token` is
  * never fetched, displayed, or accepted by the API. */
+/** #137/#169: the Settings view — whitelisted config with a mode-aware
+ * agent form (local command or HTTP endpoint). `api_token` and agent key
+ * material are never fetched, displayed, or accepted by the API: the key
+ * field is write-only and only ever used to print a one-time hint for
+ * `.tissue/secrets.yml` / env — the API stores just the `api_key_ref`. */
 async function renderSettings() {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
     const el = app();
     if (!el)
         return;
@@ -688,12 +693,38 @@ async function renderSettings() {
       <p class="settings-note">Non-secret parts of <code>.tissue/config.yml</code>.
         The API token is never shown here — set it via <code>TISSUE_API_TOKEN</code>
         or the <code>api_token:</code> line in the repo (env var recommended).</p>
-      <label>Agent command
-        <input id="cfg-agent-command" type="text" placeholder="e.g. claude (empty = sync stays record-only)">
+      <label>Agent mode
+        <select id="cfg-agent-mode" aria-label="Agent mode">
+          <option value="none">None (sync stays record-only)</option>
+          <option value="command">Local command</option>
+          <option value="http">HTTP endpoint</option>
+        </select>
       </label>
-      <label>Agent args (one per line; <code>{issue}</code> is replaced with the issue id)
-        <textarea id="cfg-agent-args" rows="3"></textarea>
-      </label>
+      <div id="cfg-mode-command">
+        <label>Agent command
+          <input id="cfg-agent-command" type="text" placeholder="e.g. claude">
+        </label>
+        <label>Agent args (one per line; <code>{issue}</code> is replaced with the issue id)
+          <textarea id="cfg-agent-args" rows="3"></textarea>
+        </label>
+      </div>
+      <div id="cfg-mode-http" hidden>
+        <label>Endpoint URL
+          <input id="cfg-agent-endpoint" type="text" placeholder="e.g. http://127.0.0.1:8080/v1/chat/completions">
+        </label>
+        <label>Model
+          <input id="cfg-agent-model" type="text" placeholder="e.g. mistral-large-latest">
+        </label>
+        <label>API key reference (<code>api_key_ref</code> — a name, never the key)
+          <input id="cfg-agent-keyref" type="text" placeholder="e.g. mistral  or  env:TISSUE_AGENT_API_KEY">
+        </label>
+        <label>API key (write-only — never stored in config or sent to the API)
+          <span class="key-field">
+            <input id="cfg-agent-key" type="password" autocomplete="off" placeholder="only needed once, to fill secrets.yml">
+            <button id="cfg-agent-key-toggle" type="button" class="btn btn-ghost">Show</button>
+          </span>
+        </label>
+      </div>
       <label>Agent timeout (seconds)
         <input id="cfg-agent-timeout" type="number" min="1" step="1">
       </label>
@@ -714,40 +745,94 @@ async function renderSettings() {
         document.getElementById("cfg-view").textContent = String(e instanceof Error ? e.message : e);
     }
     const agent = cfg.agent;
-    document.getElementById("cfg-agent-command").value = (_a = agent === null || agent === void 0 ? void 0 : agent.command) !== null && _a !== void 0 ? _a : "";
+    const mode = (_a = agent === null || agent === void 0 ? void 0 : agent.mode) !== null && _a !== void 0 ? _a : ((agent === null || agent === void 0 ? void 0 : agent.command) ? "command" : "none");
+    document.getElementById("cfg-agent-mode").value = mode;
+    document.getElementById("cfg-agent-command").value = (_b = agent === null || agent === void 0 ? void 0 : agent.command) !== null && _b !== void 0 ? _b : "";
     document.getElementById("cfg-agent-args").value =
-        ((_b = agent === null || agent === void 0 ? void 0 : agent.args) !== null && _b !== void 0 ? _b : []).join("\n");
+        ((_c = agent === null || agent === void 0 ? void 0 : agent.args) !== null && _c !== void 0 ? _c : []).join("\n");
+    document.getElementById("cfg-agent-endpoint").value = (_d = agent === null || agent === void 0 ? void 0 : agent.endpoint) !== null && _d !== void 0 ? _d : "";
+    document.getElementById("cfg-agent-model").value = (_e = agent === null || agent === void 0 ? void 0 : agent.model) !== null && _e !== void 0 ? _e : "";
+    document.getElementById("cfg-agent-keyref").value = (_f = agent === null || agent === void 0 ? void 0 : agent.api_key_ref) !== null && _f !== void 0 ? _f : "";
     document.getElementById("cfg-agent-timeout").value =
-        String((_c = agent === null || agent === void 0 ? void 0 : agent.timeout_sec) !== null && _c !== void 0 ? _c : 120);
-    document.getElementById("cfg-remote").value = (_d = cfg.remote) !== null && _d !== void 0 ? _d : "";
+        String((_g = agent === null || agent === void 0 ? void 0 : agent.timeout_sec) !== null && _g !== void 0 ? _g : 120);
+    document.getElementById("cfg-remote").value = (_h = cfg.remote) !== null && _h !== void 0 ? _h : "";
     document.getElementById("cfg-view").textContent = JSON.stringify(cfg, null, 2);
-    (_e = document.getElementById("cfg-save")) === null || _e === void 0 ? void 0 : _e.addEventListener("click", async () => {
+    const syncModeSections = () => {
+        const m = document.getElementById("cfg-agent-mode").value;
+        const cmd = document.getElementById("cfg-mode-command");
+        const http = document.getElementById("cfg-mode-http");
+        if (cmd)
+            cmd.hidden = m !== "command";
+        if (http)
+            http.hidden = m !== "http";
+    };
+    syncModeSections();
+    (_j = document.getElementById("cfg-agent-mode")) === null || _j === void 0 ? void 0 : _j.addEventListener("change", syncModeSections);
+    const keyInput = document.getElementById("cfg-agent-key");
+    (_k = document.getElementById("cfg-agent-key-toggle")) === null || _k === void 0 ? void 0 : _k.addEventListener("click", (ev) => {
+        if (!keyInput)
+            return;
+        const show = keyInput.type === "password";
+        keyInput.type = show ? "text" : "password";
+        ev.target.textContent = show ? "Hide" : "Show";
+    });
+    (_l = document.getElementById("cfg-save")) === null || _l === void 0 ? void 0 : _l.addEventListener("click", async () => {
+        var _a;
         const result = document.getElementById("cfg-result");
         if (!result)
             return;
-        const command = document.getElementById("cfg-agent-command").value.trim();
-        const args = document.getElementById("cfg-agent-args").value
-            .split("\n")
-            .map((s) => s.trim())
-            .filter((s) => s.length > 0);
+        const mode = document.getElementById("cfg-agent-mode").value;
         const timeoutRaw = document.getElementById("cfg-agent-timeout").value.trim();
         const timeout = timeoutRaw ? parseInt(timeoutRaw, 10) : NaN;
         if (timeoutRaw && (!Number.isFinite(timeout) || timeout < 1)) {
             result.textContent = "Timeout must be a positive number of seconds.";
             return;
         }
+        const timeoutSec = timeoutRaw ? timeout : 120;
         const remote = document.getElementById("cfg-remote").value.trim();
-        const update = {
-            remote,
-            agent: command
-                ? { command, args, timeout_sec: timeoutRaw ? timeout : 120 }
-                : null,
-            actor: "human:gui",
-        };
+        let agentUpdate = null;
+        if (mode === "command") {
+            const command = document.getElementById("cfg-agent-command").value.trim();
+            if (!command) {
+                result.textContent = "Command mode needs a command (or switch mode to None).";
+                return;
+            }
+            const args = document.getElementById("cfg-agent-args").value
+                .split("\n")
+                .map((s) => s.trim())
+                .filter((s) => s.length > 0);
+            agentUpdate = { mode: "command", command, args, timeout_sec: timeoutSec };
+        }
+        else if (mode === "http") {
+            const endpoint = document.getElementById("cfg-agent-endpoint").value.trim();
+            const keyRef = document.getElementById("cfg-agent-keyref").value.trim();
+            const model = document.getElementById("cfg-agent-model").value.trim();
+            if (!/^https?:\/\/\S+$/.test(endpoint)) {
+                result.textContent = "Endpoint must be an http(s) URL (e.g. http://127.0.0.1:8080/v1/chat/completions).";
+                return;
+            }
+            if (!keyRef || /\s/.test(keyRef)) {
+                result.textContent = "API key reference is required and must be a single token (a secrets.yml name or env:VAR).";
+                return;
+            }
+            agentUpdate = { mode: "http", endpoint, model: model || null, api_key_ref: keyRef, timeout_sec: timeoutSec };
+        }
+        const update = { remote, agent: agentUpdate, actor: "human:gui" };
         result.textContent = "…";
         try {
             await putJson("/api/config", update);
-            result.textContent = "Saved — config updated and committed.";
+            // The key field is write-only: if a key was entered, show the one-time
+            // instruction for storing it outside git — the API never saw it.
+            const keyVal = (_a = keyInput === null || keyInput === void 0 ? void 0 : keyInput.value.trim()) !== null && _a !== void 0 ? _a : "";
+            if (mode === "http" && keyVal && agentUpdate) {
+                const ref = agentUpdate.api_key_ref;
+                result.textContent =
+                    `Saved — config updated and committed. Store the API key once, outside git: ` +
+                        `add \`${esc(ref)}: "…"\` to <code>.tissue/secrets.yml</code> (gitignored), or export it as <code>TISSUE_AGENT_API_KEY</code>.`;
+            }
+            else {
+                result.textContent = "Saved — config updated and committed.";
+            }
             await renderSettings();
         }
         catch (e) {
