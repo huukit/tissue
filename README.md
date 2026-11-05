@@ -79,7 +79,9 @@ toolchain, no node, no server dependencies.
    from source: `cd src && cargo build --release`
 2. **Bootstrap a project** — `tissue init --from-github huukit/tissue`
    creates `tissue-issues/` with this repo's own issues imported (via `gh`;
-   run `gh auth login` first), or `tissue init --remote /path/to/remote` for a
+   run `gh auth login` first — under `sudo` use `sudo -E` or the absolute
+   `gh` path, since secure_path drops it, #226), or
+   `tissue init --remote /path/to/remote` for a
    fully offline filesystem remote, or bare `tissue init` for an empty repo
 3. **View it** — `cd <your-project>-issues && tissue serve`, then open
    <http://127.0.0.1:7323>

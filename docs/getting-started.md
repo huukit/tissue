@@ -125,6 +125,13 @@ tissue init --from-github huukit/tissue --dir ~/tissue-issues
 makes `~/tissue-issues` a self-contained issue repo (own git history,
 own config). Use `--dir` whenever you want to control that placement.
 
+`--from-github` needs the `gh` CLI installed and authenticated (`gh auth
+login`, or `GH_TOKEN` in the environment) — without it, init fails fast
+with a clear hint before writing anything (#226). Note that `sudo` strips
+`gh` from `PATH` (secure_path): use `sudo -E`, the absolute path to `gh`,
+or run init as the unprivileged service user (`sudo -u tissue ...`), never
+as root — the repo dir is owned by that user (#132).
+
 ## The GUI and its API token
 
 `tissue serve`'s GUI is the full review surface: browse issues (with

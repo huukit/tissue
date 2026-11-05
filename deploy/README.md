@@ -48,6 +48,13 @@ This is the only document you need for one-time setup.
    # or: sudo -u tissue tissue init --from-github OWNER/REPO --dir /srv/tissue-issues
    ```
 
+   Always run init as the `tissue` user, never as root — the repo dir is
+   owned by `tissue` (#132). `--from-github` needs `gh` installed and
+   authenticated **for that user** (`sudo -u tissue gh auth login`, or
+   `GH_TOKEN` in the unit's `EnvironmentFile=`): plain `sudo` strips `gh`
+   from `PATH` (secure_path) and init then fails fast with a clear "`gh`
+   CLI not found on PATH" hint (#226).
+
 4. **Configure** the viewer for your box: edit the literal paths in the
    `ExecStart=` line of `/etc/systemd/system/tissue.service` (systemd does
    not expand `$VARIABLES` from `Environment=` inside `ExecStart=` — using

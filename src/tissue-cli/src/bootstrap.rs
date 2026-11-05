@@ -59,6 +59,12 @@ pub fn run(repo_root: &Path, opts: &InitOptions) -> Result<(), String> {
         return dry_run_report(&project, &target, opts);
     }
 
+    // #226: fail fast with a clear hint when gh is missing or not
+    // authenticated — before anything is written to disk.
+    if opts.from_github.is_some() {
+        preflight_gh()?;
+    }
+
     let uses_target = opts.from_github.is_some() || opts.remote.is_some() || opts.dir.is_some();
     let issue_repo = if uses_target {
         target
@@ -200,6 +206,33 @@ fn git_command(args: &[&str]) -> Result<(), String> {
             args.join(" "),
             String::from_utf8_lossy(&out.stderr).trim()
         ))
+    }
+}
+
+/// #226: preflight the `gh` CLI before an import — a missing gh (e.g. under
+/// sudo, whose secure_path drops it from PATH) or an unauthenticated one must
+/// fail with a clear hint, not a raw OS error.
+fn preflight_gh() -> Result<(), String> {
+    match Command::new("gh").arg("--version").output() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(
+            "`gh` CLI not found on PATH — install it and run `gh auth login` first (or set \
+             GH_TOKEN); under sudo use `sudo -E` or the absolute path to gh, since sudo's \
+             secure_path drops it from PATH"
+                .to_string(),
+        ),
+        Err(e) => Err(format!("running gh: {e}")),
+        Ok(out) if !out.status.success() => Err(format!(
+            "`gh --version` failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )),
+        Ok(_) => match Command::new("gh").args(["auth", "status"]).output() {
+            Ok(a) if a.status.success() => Ok(()),
+            Ok(a) => Err(format!(
+                "`gh` is installed but not authenticated — run `gh auth login` first: {}",
+                String::from_utf8_lossy(&a.stderr).trim()
+            )),
+            Err(e) => Err(format!("running `gh auth status`: {e}")),
+        },
     }
 }
 

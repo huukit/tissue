@@ -27,6 +27,12 @@ two-week keep/kill evaluation mapped to #3's acceptance criteria.
    # imports ALL issues (open+closed; merged PRs as closed), comments to agent.jsonl
    ```
 
+   Requires `gh` installed and authenticated for the user running it
+   (`gh auth login` first, or `GH_TOKEN`); on the testing box run this as
+   the `tissue` user (`sudo -u tissue ...` from /srv), not via plain
+   `sudo` — sudo's secure_path drops `gh` from `PATH` and init fails fast
+   with a clear hint (#226, #132).
+
    Idempotent: re-running skips existing ids (`--force` re-imports).
 3. **Remote setup** — filesystem remote first (fully offline-capable), optional
    GitHub private remote for off-box backup:
