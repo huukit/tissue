@@ -199,6 +199,21 @@ enum Commands {
         #[command(subcommand)]
         command: TokenCommands,
     },
+    /// Generate a dev fixture issue whose human/AI data is deliberately out
+    /// of sync (#171). Hidden from --help; requires `dev_fixtures: true` in
+    /// .tissue/config.yml so it can never run against a real repo.
+    #[command(hide = true)]
+    DevFixture {
+        /// Issue id, e.g. `IAM-42`.
+        id: String,
+        /// Scenario: human-edited, agent-proposed, both-changed,
+        /// agent-created-pending, synced-clean.
+        #[arg(long, value_name = "NAME")]
+        scenario: String,
+        /// Deterministic seed for fixture actors/timestamps.
+        #[arg(long, default_value = "1")]
+        seed: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -430,7 +445,18 @@ fn run(cli: Cli) -> Result<(), String> {
         Commands::Release { command } => release_cmd(&repo, command),
         Commands::Project { command } => project_cmd(&repo, command),
         Commands::Token { command } => token_cmd(&repo, command),
+        Commands::DevFixture { id, scenario, seed } => dev_fixture_cmd(&repo, &id, &scenario, seed),
     }
+}
+
+/// #171: dev-fixture generator — thin wrapper over tissue-core::fixture;
+/// the core enforces the `dev_fixtures: true` opt-in and the invariants.
+fn dev_fixture_cmd(repo: &Path, id: &str, scenario: &str, seed: u64) -> Result<(), String> {
+    require_repo(repo)?;
+    let grepo = git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    let summary = tissue_core::fixture::generate(&grepo, id, scenario, seed)?;
+    println!("{summary}");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

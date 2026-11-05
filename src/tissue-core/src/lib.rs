@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod config;
+pub mod fixture;
 pub mod git;
 pub mod human;
 pub mod projects;

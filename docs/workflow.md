@@ -136,3 +136,14 @@ stream and the commit).
 - [CLI reference](cli-reference.md) — every command, flag, and API endpoint
 - [CLI reference](cli-reference.md) — every command and flag
 - [Agent workflow](agent-workflow.md) — how an agent operates via CLI only (#3 dogfood)
+
+## Dev fixtures for manual testing (#171)
+
+`tissue dev-fixture <ID> --scenario <name> [--seed N]` (hidden from
+`--help`) generates an issue whose human format and AI stream are
+deliberately out of sync, so you can smoke-test the sync/conflict paths:
+`human-edited`, `agent-proposed`, `both-changed`,
+`agent-created-pending`, `synced-clean`. It is deterministic (`--seed`)
+and every mutation is still a proper git commit. The command **refuses to
+run unless `dev_fixtures: true` is set in `.tissue/config.yml`** — enable
+that flag only in a throwaway test repo, never in a real one.
