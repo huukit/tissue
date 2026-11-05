@@ -7,6 +7,7 @@
  *   GET /api/issues/:id    -> { issue: IssueDetail } | 404 { error }
  *   GET /api/releases      -> [{ id, title, status, created, updated }]
  *   GET /api/releases/:id  -> ReleaseDetail | 404 { error }  (Stage 2, #97)
+ *   POST /api/releases     -> 201 { created, title } | 400/409/401 { error }  (#173)
  *
  * Stage 1 (#96): app shell with sidebar navigation
  * (Issues / Needs Review / Releases), a project switcher derived from
@@ -523,16 +524,68 @@ async function renderReviewQueue() {
     el.insertAdjacentHTML("beforeend", `<ul class="proposal-list">${entries.map(proposalCardHtml).join("")}</ul>`);
     bindProposalActions();
 }
+/** #173: "+ New release" form — POST /api/releases with the token, then
+ * navigate to the created release. */
+function newReleaseFormHtml() {
+    return `<div class="new-issue-form" id="new-release-form" hidden>
+    <h3>New release</h3>
+    <label>Id
+      <input id="new-release-id" type="text" placeholder="v1.2.3" aria-label="Release id (v + semver)">
+    </label>
+    <label>Title
+      <input id="new-release-title" type="text" placeholder="One line" aria-label="Release title">
+    </label>
+    <button id="new-release-create" class="btn">Create release</button>
+    <button id="new-release-cancel" class="btn btn-ghost">Cancel</button>
+    <p id="new-release-result" class="edit-result" aria-live="polite"></p>
+  </div>`;
+}
+function bindNewRelease() {
+    var _a, _b;
+    const form = document.getElementById("new-release-form");
+    if (!form)
+        return;
+    const result = document.getElementById("new-release-result");
+    const idEl = document.getElementById("new-release-id");
+    const titleEl = document.getElementById("new-release-title");
+    (_a = document.getElementById("new-release-cancel")) === null || _a === void 0 ? void 0 : _a.addEventListener("click", () => {
+        form.hidden = true;
+    });
+    (_b = document.getElementById("new-release-create")) === null || _b === void 0 ? void 0 : _b.addEventListener("click", async () => {
+        if (!result || !idEl || !titleEl)
+            return;
+        const id = idEl.value.trim();
+        const title = titleEl.value.trim();
+        if (!/^v\d+\.\d+\.\d+$/.test(id)) {
+            result.textContent = "The id must be v + semver (e.g. v1.2.3).";
+            return;
+        }
+        if (!title) {
+            result.textContent = "A one-line title is required.";
+            return;
+        }
+        result.textContent = "…";
+        try {
+            await postJson("/api/releases", { id, title, actor: "human:gui" });
+            window.location.hash = `#/releases/${encodeURIComponent(id)}`;
+        }
+        catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            result.textContent = /401|token/i.test(msg)
+                ? "Creating failed — set the API token first (it protects all write actions)."
+                : /already exists|409/i.test(msg)
+                    ? `Release ${id} already exists — pick another version.`
+                    : msg;
+        }
+    });
+}
 async function renderReleases() {
+    var _a;
     const el = app();
     if (!el)
         return;
     try {
         const releases = await fetchJson("/api/releases");
-        if (releases.length === 0) {
-            el.innerHTML = `<p class="loading">No releases in this issue repo yet.</p>`;
-            return;
-        }
         const rows = releases
             .slice()
             .sort((a, b) => b.id.localeCompare(a.id))
@@ -546,7 +599,26 @@ async function renderReleases() {
       </li>`;
         })
             .join("");
-        el.innerHTML = `<ul class="issue-list">${rows}</ul>`;
+        el.innerHTML = `
+      ${tokenBarHtml()}
+      <div class="list-toolbar">
+        <button id="new-release-btn" class="btn" title="Create a release (needs the API token)">+ New release</button>
+      </div>
+      ${newReleaseFormHtml()}
+      ${releases.length === 0
+            ? `<p class="loading">No releases in this issue repo yet.</p>`
+            : `<ul class="issue-list">${rows}</ul>`}`;
+        bindTokenBar();
+        (_a = document.getElementById("new-release-btn")) === null || _a === void 0 ? void 0 : _a.addEventListener("click", () => {
+            const f = document.getElementById("new-release-form");
+            if (f)
+                f.hidden = !f.hidden;
+            if (!(f === null || f === void 0 ? void 0 : f.hidden)) {
+                const t = document.getElementById("new-release-id");
+                t === null || t === void 0 ? void 0 : t.focus();
+            }
+        });
+        bindNewRelease();
     }
     catch (e) {
         el.innerHTML = `<p class="error">${esc(e instanceof Error ? e.message : String(e))}</p>`;

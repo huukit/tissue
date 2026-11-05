@@ -419,6 +419,64 @@ fn api_write_create_project(
     }
 }
 
+/// POST /api/releases {"id": "v1.2.3", "title": "...", ("body", "actor")?} —
+/// create a release through the same core path as `tissue release create`
+/// (#81/#173): one validation, one commit, no CLI/API drift.
+fn api_write_create_release(
+    stream: &mut TcpStream,
+    repo: &Path,
+    payload: &str,
+) -> Result<(), String> {
+    let v = match parse_json_body(payload) {
+        Ok(v) => v,
+        Err(code) => return respond_json(
+            stream,
+            code,
+            "{\"error\":\"request body must be a JSON object: {\"id\",\"title\",(\"body\",\"actor\")}\"}",
+        ),
+    };
+    let (Some(id), Some(title)) = (json_field(&v, "id"), json_field(&v, "title")) else {
+        return respond_json(
+            stream,
+            400,
+            "{\"error\":\"body must have string fields: id, title\"}",
+        );
+    };
+    let body = json_field(&v, "body").unwrap_or("");
+    let actor_id = json_field(&v, "actor").unwrap_or("human:gui");
+    let grepo = tissue_core::git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    let author = tissue_core::git::Author {
+        name: actor_id.to_string(),
+        email: format!("{actor_id}@tissue.local"),
+    };
+    match tissue_core::releases::Releases::new(grepo).create(
+        id,
+        title,
+        body,
+        &crate::now_utc(),
+        &author,
+    ) {
+        Ok(()) => respond_json(
+            stream,
+            201,
+            &format!(
+                "{{\"created\":{},\"title\":{}}}",
+                json_str(id),
+                json_str(title)
+            ),
+        ),
+        // Duplicate release is a state conflict; bad id/title is bad input.
+        Err(tissue_core::releases::Error::Conflict(m)) => {
+            respond_json(stream, 409, &format!("{{\"error\":{}}}", json_str(&m)))
+        }
+        Err(e) => respond_json(
+            stream,
+            400,
+            &format!("{{\"error\":{}}}", json_str(&e.to_string())),
+        ),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Agent write API (#80): append/propose only, never the human format directly
 // (STATE.md decision 4). All writes go through tissue-core so the
@@ -536,6 +594,9 @@ fn api_write_route(
     }
     if rest == "projects" {
         return api_write_create_project(stream, repo, payload);
+    }
+    if rest == "releases" {
+        return api_write_create_release(stream, repo, payload);
     }
     if let Some(tail) = rest.strip_prefix("issues/") {
         let Some((id, verb)) = tail.split_once('/') else {

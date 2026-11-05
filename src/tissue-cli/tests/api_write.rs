@@ -538,6 +538,98 @@ fn create_via_api_with_body_commits() {
     assert!(status.contains("400"), "bad id refused: {status}");
 }
 
+/// #173: POST /api/releases creates a release through the same core path
+/// as `tissue release create` — one commit, v+semver validation shared with
+/// the CLI, duplicates refused — and the GUI's read endpoint lists it.
+#[test]
+fn create_release_via_api_shares_cli_validation() {
+    let repo = Scratch::new("release-api");
+    repo.set_token("test-token-1");
+    let server = start_server(&repo);
+    let addr = server.addr;
+
+    // Auth first, same as every write endpoint: missing/wrong token -> 401.
+    let (status, _, _) = post(
+        &addr,
+        "/api/releases",
+        r#"{"id":"v1.0.0","title":"x"}"#,
+        None,
+    );
+    assert!(status.contains("401"), "no token: {status}");
+    let (status, _, _) = post(
+        &addr,
+        "/api/releases",
+        r#"{"id":"v1.0.0","title":"x"}"#,
+        Some("wrong-token"),
+    );
+    assert!(status.contains("401"), "wrong token: {status}");
+
+    let before = repo.commit_count();
+    let (status, _, body) = post(
+        &addr,
+        "/api/releases",
+        r#"{"id":"v1.0.0","title":"First cut","actor":"human:gui"}"#,
+        Some("test-token-1"),
+    );
+    assert!(status.contains("201"), "create: {status} body {body}");
+    assert!(body.contains("v1.0.0"), "created id in response: {body}");
+    assert_eq!(
+        repo.commit_count(),
+        before + 1,
+        "release create = one commit"
+    );
+    let log = repo.git(&["log", "-1", "--pretty=%s"]);
+    assert!(
+        log.contains("release create v1.0.0"),
+        "commit message: {log}"
+    );
+    let rel = std::fs::read_to_string(repo.root.join(".tissue/releases/v1.0.0/release.md"))
+        .expect("release.md written");
+    assert!(rel.contains("First cut"), "title written: {rel}");
+    assert!(rel.contains("draft"), "starts as draft: {rel}");
+
+    // The GUI's read endpoint lists it.
+    let (status, body) = get(&addr, "/api/releases");
+    assert!(
+        status.contains("200") && body.contains("v1.0.0"),
+        "listed: {status} {body}"
+    );
+
+    // Duplicate -> 409; malformed/traversal ids -> 400 with the shared
+    // v+semver rule, and failed creates commit nothing.
+    let (status, _, body) = post(
+        &addr,
+        "/api/releases",
+        r#"{"id":"v1.0.0","title":"dup"}"#,
+        Some("test-token-1"),
+    );
+    assert!(
+        status.contains("409") && body.contains("already exists"),
+        "dup: {status} {body}"
+    );
+    for bad in ["1.0.0", "v1.2", "../v9.9.9", "v1.2.3-rc1"] {
+        let (status, _, body) = post(
+            &addr,
+            "/api/releases",
+            &format!(r#"{{"id":"{bad}","title":"bad"}}"#),
+            Some("test-token-1"),
+        );
+        assert!(
+            status.contains("400") && body.contains("v+semver"),
+            "bad id {bad}: {status} {body}"
+        );
+    }
+    assert!(
+        !repo.root.join(".tissue/releases/v9.9.9").exists(),
+        "traversal id never reached the filesystem"
+    );
+    assert_eq!(
+        repo.commit_count(),
+        before + 1,
+        "failed creates commit nothing"
+    );
+}
+
 /// #118 regression: a CLI-synced issue must stay writable via the API.
 /// `tissue sync` used to write the human-sync record without the
 /// `reconciliation` field; strict `AgentStream::open` then rejected

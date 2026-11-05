@@ -397,6 +397,15 @@ module as `tissue project`, so CLI and API cannot drift:
 - `GET /api/projects` — tokenless read: `{"default": "e2e", "projects": [{"name": "e2e", "prefix": "IAM", "default": true}, ...]}`
 - `POST /api/projects` — token-protected write: `{"name": "ops", "prefix": "OPS", "actor"?: "human:gui"}` → `201 {"created": true}` and one `project add: <name> -> <prefix>` commit; conflicts (duplicate prefix, remapping an existing name) → 409; invalid input → 400.
 
+### Releases API (#173)
+
+`serve` exposes release creation over HTTP through the same tissue-core
+module as `tissue release create`, so CLI and API cannot drift:
+
+- `GET /api/releases` — tokenless read: `[{ "id": "v1.0.0", "title": "…", "status": "draft", "created": "…", "updated": "…" }]`
+- `GET /api/releases/<id>` — tokenless read: release front matter + derived assigned issues
+- `POST /api/releases` — token-protected write: `{"id": "v1.2.3", "title": "…", "body"?: "…", "actor"?: "human:gui"}` → `201 {"created": "v1.2.3", "title": "…"}` and one `release create <id>: <title>` commit; the release starts as `draft` under `.tissue/releases/<id>/`. Duplicate id → 409; an id that is not `v`+semver → 400. The GUI's Releases view has a "+ New release" button wired to this endpoint.
+
 ### API tokens (#159)
 
 The write API authenticates with bearer tokens. Managed tokens are issued,
