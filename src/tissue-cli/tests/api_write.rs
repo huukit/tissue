@@ -1346,3 +1346,36 @@ fn serve_concurrent_writes_and_slow_client() {
     }
     let _ = slow.shutdown(std::net::Shutdown::Both);
 }
+
+/// #196: API error bodies never contain absolute filesystem paths — the
+/// detail goes to server stderr, the response carries a generic message.
+#[test]
+fn api_error_bodies_contain_no_absolute_paths() {
+    let repo = Scratch::new("error-sanitize-196");
+    repo.set_token("tok");
+    let server = start_server(&repo);
+    let addr = &server.addr;
+    // 404 on a missing issue detail — the core error embeds the issue path.
+    let (status, body) = get(addr, "/api/issues/NOPE-1");
+    assert!(status.contains("404"), "{status}");
+    assert!(!body.contains("/tmp/"), "leaked fs path: {body}");
+    assert!(
+        !body.contains(&repo.root.display().to_string()),
+        "leaked repo path: {body}"
+    );
+    // 400 on a malformed write body.
+    let (status, _, body) = post(addr, "/api/issues", "{not json", Some("tok"));
+    assert!(status.contains("400"), "{status}");
+    assert!(!body.contains("/tmp/"), "leaked fs path: {body}");
+    // 409 conflict on duplicate create — error text must be path-free too.
+    let out = repo.tissue(&["create", "IAM-1", "exists", "--body", "b"]);
+    assert!(out.status.success());
+    let (status, _, body) = post(
+        addr,
+        "/api/issues",
+        r#"{"id":"IAM-1","title":"dup"}"#,
+        Some("tok"),
+    );
+    assert!(status.contains("400") || status.contains("409"), "{status}");
+    assert!(!body.contains("/tmp/"), "leaked fs path: {body}");
+}

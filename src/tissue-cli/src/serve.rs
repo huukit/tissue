@@ -431,7 +431,7 @@ fn api_config_get(stream: &mut TcpStream, repo: &Path) -> Result<(), String> {
             let body = serde_json::to_string(&view).unwrap_or_else(|_| "{}".into());
             respond_json(stream, 200, &body)
         }
-        Err(e) => respond_json(stream, 400, &format!("{{\"error\":{}}}", json_str(&e))),
+        Err(e) => respond_error(stream, 400, &e),
     }
 }
 
@@ -504,7 +504,7 @@ fn api_put_route(
     };
     match tissue_core::config::apply_whitelisted_update(&grepo, &updates, &author) {
         Ok(()) => respond_json(stream, 200, "{\"updated\":true}"),
-        Err(e) => respond_json(stream, 400, &format!("{{\"error\":{}}}", json_str(&e))),
+        Err(e) => respond_error(stream, 400, &e),
     }
 }
 
@@ -557,12 +557,12 @@ fn api_write_create_project(
         ) => respond_json(
             stream,
             409,
-            &format!("{{\"error\":{}}}", json_str(&e.to_string())),
+            &format!("{{\"error\":{}}}", json_str(&api_error(&e.to_string()))),
         ),
         Err(e) => respond_json(
             stream,
             400,
-            &format!("{{\"error\":{}}}", json_str(&e.to_string())),
+            &format!("{{\"error\":{}}}", json_str(&api_error(&e.to_string()))),
         ),
     }
 }
@@ -614,13 +614,11 @@ fn api_write_create_release(
             ),
         ),
         // Duplicate release is a state conflict; bad id/title is bad input.
-        Err(tissue_core::releases::Error::Conflict(m)) => {
-            respond_json(stream, 409, &format!("{{\"error\":{}}}", json_str(&m)))
-        }
+        Err(tissue_core::releases::Error::Conflict(m)) => respond_error(stream, 409, &m),
         Err(e) => respond_json(
             stream,
             400,
-            &format!("{{\"error\":{}}}", json_str(&e.to_string())),
+            &format!("{{\"error\":{}}}", json_str(&api_error(&e.to_string()))),
         ),
     }
 }
@@ -837,12 +835,12 @@ fn api_tokens_route(
                         ),
                     ),
                     Err(tissue_core::tokens::TokenError::DuplicateLabel(m)) => {
-                        respond_json(stream, 409, &format!("{{\"error\":{}}}", json_str(&m)))
+                        respond_error(stream, 409, &m)
                     }
                     Err(e) => respond_json(
                         stream,
                         400,
-                        &format!("{{\"error\":{}}}", json_str(&e.to_string())),
+                        &format!("{{\"error\":{}}}", json_str(&api_error(&e.to_string()))),
                     ),
                 }
             }
@@ -874,12 +872,12 @@ fn api_tokens_route(
                     ),
                 ),
                 Err(tissue_core::tokens::TokenError::UnknownId(m)) => {
-                    respond_json(stream, 404, &format!("{{\"error\":{}}}", json_str(&m)))
+                    respond_error(stream, 404, &m)
                 }
                 Err(e) => respond_json(
                     stream,
                     400,
-                    &format!("{{\"error\":{}}}", json_str(&e.to_string())),
+                    &format!("{{\"error\":{}}}", json_str(&api_error(&e.to_string()))),
                 ),
             };
         }
@@ -995,7 +993,7 @@ fn api_write_create_issue(
                 }
             ),
         ),
-        Err(e) => respond_json(stream, 400, &format!("{{\"error\":{}}}", json_str(&e))),
+        Err(e) => respond_error(stream, 400, &e),
     }
 }
 
@@ -1022,7 +1020,7 @@ fn api_write_append_record(
     };
     match crate::api_write::append_record(repo, id, actor_id, data) {
         Ok(seq) => respond_json(stream, 201, &format!("{{\"appended\":true,\"seq\":{seq}}}")),
-        Err(e) => respond_json(stream, 400, &format!("{{\"error\":{}}}", json_str(&e))),
+        Err(e) => respond_error(stream, 400, &e),
     }
 }
 
@@ -1102,10 +1100,9 @@ fn api_write_decide(
             ),
         ),
         // #192: an actor-kind refusal from core is a 403, not a 400.
-        Err(e) if e.contains("may not approve/reject") => {
-            respond_json(stream, 403, &format!("{{\"error\":{}}}", json_str(&e)))
-        }
-        Err(e) => respond_json(stream, 400, &format!("{{\"error\":{}}}", json_str(&e))),
+        Err(e) if e.contains("may not approve/reject") => respond_error(stream, 403, &e),
+        // #196: sanitized body (no fs paths), full detail to stderr.
+        Err(e) => respond_error(stream, 400, &e),
     }
 }
 
@@ -1151,7 +1148,7 @@ fn api_write_propose(
                 json_str(&proposal_id)
             ),
         ),
-        Err(e) => respond_json(stream, 400, &format!("{{\"error\":{}}}", json_str(&e))),
+        Err(e) => respond_error(stream, 400, &e),
     }
 }
 
@@ -1560,6 +1557,41 @@ fn write_response(
 
 fn respond_json(stream: &mut TcpStream, status: u16, body: &str) -> Result<(), String> {
     write_response(stream, status, "application/json", body.as_bytes())
+}
+
+/// #196: sanitize an error string for an API response body — strip absolute
+/// filesystem paths (loopback-only, but the tunnel still shouldn't learn
+/// the box's layout); the full detail goes to stderr server-side.
+fn api_error(e: &str) -> String {
+    let mut out = String::with_capacity(e.len());
+    let mut rest = e;
+    loop {
+        match rest.find('/') {
+            None => break,
+            Some(i) => {
+                out.push_str(&rest[..i]);
+                // A path token: from the '/' to the next whitespace.
+                let end = rest[i..]
+                    .find(|c: char| c.is_whitespace())
+                    .map(|j| i + j)
+                    .unwrap_or(rest.len());
+                out.push_str("<path>");
+                rest = &rest[end..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// #196: respond with a sanitized error JSON body.
+fn respond_error(stream: &mut TcpStream, status: u16, e: &str) -> Result<(), String> {
+    eprintln!("api error ({status}): {e}");
+    respond_json(
+        stream,
+        status,
+        &format!("{{\"error\":{}}}", json_str(&api_error(e))),
+    )
 }
 
 /// JSON-encode a string scalar (escaping per RFC 8259 basics).
