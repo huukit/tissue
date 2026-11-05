@@ -602,6 +602,9 @@ fn token_input_only_on_settings() {
     assert!(
         status.contains("200") && !html.contains("api-token"),
         "index.html has no token input: {status}"
+    );
+}
+
 /// #206: the Releases view renders the "+ New release" toolbar + form even
 /// on an empty repo (the v0.1.6 early-return hid them), and creating the
 /// first release from the GUI works end to end.
