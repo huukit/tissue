@@ -47,23 +47,25 @@ main @ `862f3c8`, linear, CI green on head. The core loop is real and usable fro
 
 **main is frozen at v0.1.5 until the owner's #140 smoke pass is green (testing happens 2026-11-02).** Open PRs waiting behind the freeze: #160 (#159 token lifecycle), #161 (#147 docs).
 
-## Now — v0.1.6: smoke-pass fixes + trust & auth
+## Now — v0.1.6 release (2026-11-05, in progress)
 
-**v0.1.5 is published and deployed; the owner is running the #140 smoke pass. main is frozen at v0.1.5 (`334c79c`) until that pass is green.** Verified PRs waiting behind the freeze: #160 (#159), #161 (#147), #164 (#162), #165 (#163), #166 (#150).
+main @ `6194f50` (ADR-002/decision 14). All smoke-pass findings + trust/auth merged except the last two PRs (#185 token visibility, #187 design pass — rebased, awaiting Tester re-verify). Then: PO bumps to 0.1.6, tags, verifies published release per the #148 runbook, owner re-smoke (#140 follow-up on the box).
 
-Owner ruling 2026-11-01/02: no dogfood switch before proper authentication.
+Merged this wave: #159 token lifecycle · #167 deploy EROFS guard · #169 settings/HTTP agent (decision 13) · #170 Human/AI tabs · #171 fixtures · #172+#176 project-on-create · #173 new-release API+GUI · #174/#175/#178/#147/#150/#162/#163.
 
-Smoke-pass findings (filed 2026-11-02, dev queue order):
-- **#167** deploy: box ran the pre-#158 unit → EROFS on writes; fix = unit install/upgrade path + write-probe in README (workaround: `ReadWritePaths=/srv/tissue-issues`)
-- **#175** bug: GUI/API-created project not persisted (POST /api/projects unwired) · **#176** bug: issues silently default to IAM- prefix (part of #172)
-- **#169** settings page: HTTP agent endpoint (URL + model + key) per decision 13; key in gitignored secrets file, never in config/git · **#174** serve token visible only on the settings page
-- **#172** project assignment on issue create (GUI picker, CLI --project, API field) · **#173** GUI "+ New release" + POST /api/releases
-- **#170** issue view Human/AI split · **#168** GUI controls/design pass (owner sign-off) · **#171** dev-fixture generator for out-of-sync test data
+Owner ruling 2026-11-01/02: no dogfood switch before proper authentication (#159 ✔ landed, #149 owner action pending).
 
-Trust & auth (dogfood gate):
-- **#159** token lifecycle: `tissue token issue/list/revoke`, hash-only storage, constant-time compare, per-actor tokens (PR #160) + #174
-- **#149** repo rules: owner-only PR approvals and `v*` tag pushes, read-only Actions default, 2FA — **owner action in Settings UI**
-- **#147** docs (PR #161) · **#148** runbook · **#150** hygiene · **#141** CI confirm
+## Next — v0.1.6-dioxus: UI trial on a branch (#188)
+
+Owner-planned, starts only after v0.1.6 is tagged and stable. Long-lived branch, never main; **UI changes only, no features, API frozen** (ADR-002). Reproduce the current GUI 1:1 in Dioxus as a pure API client; adopt only if the owner's review says it beats the current GUI, else discard and continue. Decision recorded in ADR-003.
+
+## Then — v0.1.7: bugs & findings
+
+Whatever the trial decides: remaining bugs/findings, #149 verification, #141 CI confirm, and the #3 dogfood prep follow-ups.
+
+## Later — PoC dogfood switch (#3)
+
+Manage tissue's own issues in tissue. Gates: #140 green + #159 + #149. Prep done: #162 (import dry-run, merged), #163 (runbook + agent workflow doc, merged).
 
 ## Later — PoC dogfood switch (#3)
 
