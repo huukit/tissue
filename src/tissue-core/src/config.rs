@@ -712,8 +712,22 @@ fn cap_tail(s: String) -> String {
 /// process group (the agent ran in its own pgid) and reap the direct child,
 /// returning `Ok((None, stderr-so-far))`. The stderr drain is bounded: after
 /// a group kill, remaining descendants may still hold the pipe, so we read
-/// what is available without blocking forever.
+/// what is available without blocking forever. Every exit path — including
+/// the error paths — kills the group and reaps the child (#228: no leaked
+/// agent processes, no zombies).
 fn wait_with_timeout(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Result<(Option<std::process::ExitStatus>, Vec<u8>), String> {
+    let result = wait_inner(child, timeout);
+    if result.is_err() {
+        kill_process_group(child.id());
+        let _ = child.wait();
+    }
+    result
+}
+
+fn wait_inner(
     child: &mut std::process::Child,
     timeout: Duration,
 ) -> Result<(Option<std::process::ExitStatus>, Vec<u8>), String> {

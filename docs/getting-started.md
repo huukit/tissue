@@ -55,6 +55,38 @@ cargo build --release
 # binary: src/target/release/tissue
 ```
 
+## Running the test battery in a constrained sandbox (#228)
+
+In a small sandbox (dev session, CI-like container) the process table can
+fill up with unreaped zombie children — only a process's parent can reap
+it, and a non-reaping PID 1 turns every leaked `git`/test child into a
+permanent zombie until `fork()` fails with EAGAIN ("Cannot fork"), which
+takes the whole session down. Two layers of protection:
+
+- **Inspect:** `tools/procwatch.py` reports zombies (with the parent pid
+  that failed to reap them), per-command counts, and headroom vs `pid_max`;
+  it exits non-zero when zombies are present and can clean up live orphaned
+  processes. Run it around the battery:
+
+  ```sh
+  python3 tools/procwatch.py                 # before; exit 1 = zombies present
+  (cd src && cargo test --workspace)
+  python3 tools/procwatch.py                 # after — zombies of our own children should not grow
+  python3 tools/procwatch.py --kill-orphans  # SIGKILL live orphaned git/tissue leftovers
+  ```
+
+- **Guard (automatic):** the integration tests in `src/tissue-cli/tests/`
+  spawn every subprocess through `tests/common/mod.rs` — own process group,
+  always reaped, group-killed on timeout/drop, a pre-fork `/proc` headroom
+  check that fails with a clear message instead of a raw EAGAIN, and a cap
+  on simultaneously live children. `tissue-core`'s agent runner kills and
+  reaps the agent's process group on every exit path. Root cause of the
+  zombie `git` processes specifically: `git commit`/`rebase` spawn a
+  detached `git maintenance run --auto` child that git never waits for, and
+  only PID 1 can reap the orphan — so all git invocations here run with
+  `-c gc.auto=0 -c maintenance.auto=0` (set via `GIT_CONFIG_*` env in the
+  test helper so the `tissue` binary's own git children inherit it too).
+
 ## The first run
 
 ```sh

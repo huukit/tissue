@@ -57,6 +57,8 @@ Three skins over one core, so humans and agents always see the same truth:
 | `operations/product-owner/` | Product documents: vision, state, branding, format specs |
 | `operations/project/` | Project documents: roadmap, decision records |
 | `src/` | Source code — Rust workspace (`tissue-core`, `tissue-cli`) |
+| `tools/` | Dev-session utilities, e.g. `procwatch.py` — inspect/kill process runaways in constrained sandboxes (#228) |
+| `docs/` | User and agent docs (`getting-started.md`, `workflow.md`, `agent-workflow.md`, …) |
 
 ## Status
 

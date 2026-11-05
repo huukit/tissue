@@ -5,10 +5,12 @@
 //! approve/reject require one, decisions commit exactly like the CLI,
 //! and rejections without a reason are refused (rejections are data).
 
+mod common;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -41,15 +43,13 @@ impl Scratch {
         let exe: PathBuf = env!("CARGO_BIN_EXE_tissue").into();
         let mut cmd = Command::new(exe);
         cmd.args(args).current_dir(&self.root).env_remove("EDITOR");
-        cmd.output().expect("run tissue binary")
+        common::output(&mut cmd, common::default_timeout()).expect("run tissue binary")
     }
 
     fn git(&self, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(&self.root)
-            .output()
-            .expect("run git");
+        let mut cmd = Command::new("git");
+        cmd.args(args).current_dir(&self.root);
+        let out = common::output(&mut cmd, common::default_timeout()).expect("run git");
         assert!(out.status.success(), "git {args:?} failed: {out:?}");
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
@@ -75,16 +75,11 @@ impl Drop for Scratch {
     }
 }
 
+// The GuardedChild drop kills the whole process group and reaps the child
+// (#228): a panicking test cannot leave a `tissue serve` runaway behind.
 struct Server {
-    child: Child,
+    _child: common::GuardedChild,
     addr: SocketAddr,
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
 }
 
 fn start_server(repo: &Scratch) -> Server {
@@ -97,15 +92,18 @@ fn start_server(repo: &Scratch) -> Server {
         .current_dir(&repo.root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = cmd.spawn().expect("spawn tissue serve");
+    let mut child = common::spawn(&mut cmd).expect("spawn tissue serve");
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     for _ in 0..100 {
         if TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50)).is_ok() {
-            return Server { child, addr };
+            return Server {
+                _child: child,
+                addr,
+            };
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    let _ = child.kill();
+    child.kill_group();
     let _ = child.wait();
     panic!("server did not come up on {addr}");
 }

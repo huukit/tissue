@@ -5,10 +5,12 @@
 //! loopback-only binding, GET-only (read-only), JSON contract shape, path
 //! traversal rejection, and zero mutation of the issue repo while browsing.
 
+mod common;
+
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -60,32 +62,25 @@ impl Scratch {
 
     fn tissue(&self, args: &[&str]) -> Output {
         let exe: PathBuf = env!("CARGO_BIN_EXE_tissue").into();
-        let out = Command::new(exe)
-            .args(args)
-            .current_dir(&self.root)
-            .env_remove("EDITOR")
-            .output()
-            .expect("run tissue binary");
+        let mut cmd = Command::new(exe);
+        cmd.args(args).current_dir(&self.root).env_remove("EDITOR");
+        let out = common::output(&mut cmd, common::default_timeout()).expect("run tissue binary");
         assert!(out.status.success(), "tissue {args:?} failed: {out:?}");
         out
     }
 
     fn git(&self, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(&self.root)
-            .output()
-            .expect("run git");
+        let mut cmd = Command::new("git");
+        cmd.args(args).current_dir(&self.root);
+        let out = common::output(&mut cmd, common::default_timeout()).expect("run git");
         assert!(out.status.success(), "git {args:?} failed: {out:?}");
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
     fn status_porcelain(&self) -> String {
-        let out = Command::new("git")
-            .args(["status", "--porcelain"])
-            .current_dir(&self.root)
-            .output()
-            .expect("git status");
+        let mut cmd = Command::new("git");
+        cmd.args(["status", "--porcelain"]).current_dir(&self.root);
+        let out = common::output(&mut cmd, common::default_timeout()).expect("git status");
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
@@ -99,16 +94,11 @@ impl Scratch {
     }
 }
 
+// The GuardedChild drop kills the whole process group and reaps the child
+// (#228): a panicking test cannot leave a `tissue serve` runaway behind.
 struct Server {
-    child: Child,
+    _child: common::GuardedChild,
     addr: SocketAddr,
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
 }
 
 /// Start `tissue serve` on an ephemeral loopback port.
@@ -132,20 +122,23 @@ fn start_server_with_env(repo: &Scratch, env: &[(&str, &str)]) -> Server {
     for (k, v) in env {
         cmd.env(k, v);
     }
-    let mut child = cmd.spawn().expect("spawn tissue serve");
+    let mut child = common::spawn(&mut cmd).expect("spawn tissue serve");
 
     // Poll until the server accepts connections.
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     for _ in 0..100 {
         if TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50)).is_ok() {
-            return Server { child, addr };
+            return Server {
+                _child: child,
+                addr,
+            };
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     if let Ok(Some(status)) = child.try_wait() {
         panic!("tissue serve exited early with {status}");
     }
-    let _ = child.kill();
+    child.kill_group();
     let _ = child.wait();
     panic!("server did not come up on {addr}");
 }
@@ -362,14 +355,13 @@ fn serve_warns_when_no_api_token_configured() {
     let exe: PathBuf = env!("CARGO_BIN_EXE_tissue").into();
 
     // No token: env unset, config has no api_token (Scratch::new setup).
-    let mut child = Command::new(&exe)
-        .args(["serve", "--port", &port.to_string()])
+    let mut cmd = Command::new(&exe);
+    cmd.args(["serve", "--port", &port.to_string()])
         .current_dir(&scratch.root)
         .env_remove("TISSUE_API_TOKEN")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn tissue serve");
+        .stderr(Stdio::piped());
+    let mut child = common::spawn(&mut cmd).expect("spawn tissue serve");
     for _ in 0..100 {
         if TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50)).is_ok() {
             break;
@@ -383,7 +375,7 @@ fn serve_warns_when_no_api_token_configured() {
     );
     // The warning goes to stderr; give the subprocess a moment to flush.
     std::thread::sleep(std::time::Duration::from_millis(100));
-    let _ = child.kill();
+    child.kill_group();
     let out = child.wait_with_output().expect("wait");
     let err = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(
@@ -400,15 +392,14 @@ fn serve_warns_when_no_api_token_configured() {
     let port = listener.local_addr().expect("addr").port();
     drop(listener);
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let mut child = Command::new(&exe)
-        .args(["serve", "--port", &port.to_string()])
+    let mut cmd = Command::new(&exe);
+    cmd.args(["serve", "--port", &port.to_string()])
         .current_dir(&scratch.root)
         .env("TISSUE_API_TOKEN", "e2e-token")
         .env_remove("EDITOR")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn tissue serve");
+        .stderr(Stdio::piped());
+    let mut child = common::spawn(&mut cmd).expect("spawn tissue serve");
     for _ in 0..100 {
         if TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50)).is_ok() {
             break;
@@ -426,7 +417,7 @@ fn serve_warns_when_no_api_token_configured() {
         status.contains("201"),
         "write with token: {status} body {resp}"
     );
-    let _ = child.kill();
+    child.kill_group();
     let out = child.wait_with_output().expect("wait 2");
     let err = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(

@@ -3,6 +3,8 @@
 //! naming the affected issue ids; push refuses non-FF; force-with-lease
 //! updates the remote after a rebase; history stays linear throughout.
 
+mod common;
+
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
@@ -10,13 +12,13 @@ fn tissue(repo: &std::path::Path, args: &[&str]) -> Output {
     let exe: PathBuf = env!("CARGO_BIN_EXE_tissue").into();
     let mut cmd = Command::new(exe);
     cmd.args(args).current_dir(repo).env_remove("EDITOR");
-    cmd.output().expect("run tissue binary")
+    common::output(&mut cmd, common::default_timeout()).expect("run tissue binary")
 }
 
 fn git(repo: &std::path::Path, args: &[&str]) -> Output {
     let mut cmd = Command::new("git");
     cmd.args(args).current_dir(repo);
-    cmd.output().expect("run git")
+    common::output(&mut cmd, common::default_timeout()).expect("run git")
 }
 
 fn assert_success(out: &Output, ctx: &str) {
@@ -99,6 +101,10 @@ fn pull_push_two_machines() {
         ),
         "init bare remote",
     );
+    // #228: receive-pack on the remote side spawns the detached
+    // `git maintenance run --auto` child based on the REMOTE's own config;
+    // client-side flags/env cannot cover it.
+    common::disable_auto_maintenance(&remote);
 
     // Machine A: init with the remote, first issue.
     let a_dir = Repo::new(&base, "machine-a");
@@ -220,6 +226,10 @@ fn pull_conflict_names_the_issue() {
         ),
         "init bare remote",
     );
+    // #228: receive-pack on the remote side spawns the detached
+    // `git maintenance run --auto` child based on the REMOTE's own config;
+    // client-side flags/env cannot cover it.
+    common::disable_auto_maintenance(&remote);
 
     let a_dir = Repo::new(&base, "machine-a");
     // init with a remote creates <project>-issues/ under the cwd.
@@ -310,7 +320,7 @@ fn pull_conflict_names_the_issue() {
         .current_dir(&a.root)
         .env("GIT_EDITOR", "true");
     assert_success(
-        &cont.output().expect("git rebase --continue"),
+        &common::output(&mut cont, common::default_timeout()).expect("git rebase --continue"),
         "continue rebase",
     );
     // History stays linear end to end; the pushed result carries both edits.

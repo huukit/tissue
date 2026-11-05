@@ -63,6 +63,13 @@ fn git(root: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
+        // #228: commit/rebase spawn `git maintenance run --auto --detach`,
+        // which git never reaps; in a sandbox with a non-reaping PID 1 those
+        // become permanent zombies and eventually fork() fails with EAGAIN.
+        .arg("-c")
+        .arg("gc.auto=0")
+        .arg("-c")
+        .arg("maintenance.auto=0")
         .args(args)
         .output()
         .map_err(|e| match e.kind() {

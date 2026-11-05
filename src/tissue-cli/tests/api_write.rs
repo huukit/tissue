@@ -4,10 +4,12 @@
 //! reads stay loopback-only and tokenless, every write produces a
 //! commit, and the human format is never written directly.
 
+mod common;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -39,15 +41,13 @@ impl Scratch {
         let exe: PathBuf = env!("CARGO_BIN_EXE_tissue").into();
         let mut cmd = Command::new(exe);
         cmd.args(args).current_dir(&self.root).env_remove("EDITOR");
-        cmd.output().expect("run tissue binary")
+        common::output(&mut cmd, common::default_timeout()).expect("run tissue binary")
     }
 
     fn git(&self, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(&self.root)
-            .output()
-            .expect("run git");
+        let mut cmd = Command::new("git");
+        cmd.args(args).current_dir(&self.root);
+        let out = common::output(&mut cmd, common::default_timeout()).expect("run git");
         assert!(out.status.success(), "git {args:?} failed: {out:?}");
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
@@ -75,16 +75,11 @@ impl Drop for Scratch {
     }
 }
 
+// The GuardedChild drop kills the whole process group and reaps the child
+// (#228): a panicking test cannot leave a `tissue serve` runaway behind.
 struct Server {
-    child: Child,
+    child: common::GuardedChild,
     addr: SocketAddr,
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
 }
 
 fn start_server(repo: &Scratch) -> Server {
@@ -105,7 +100,7 @@ fn start_server_with_env(repo: &Scratch, env: &[(&str, &str)]) -> Server {
     for (k, v) in env {
         cmd.env(k, v);
     }
-    let mut child = cmd.spawn().expect("spawn tissue serve");
+    let mut child = common::spawn(&mut cmd).expect("spawn tissue serve");
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     for _ in 0..100 {
         if TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50)).is_ok() {
@@ -113,7 +108,7 @@ fn start_server_with_env(repo: &Scratch, env: &[(&str, &str)]) -> Server {
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    let _ = child.kill();
+    child.kill_group();
     let _ = child.wait();
     panic!("server did not come up on {addr}");
 }
@@ -845,15 +840,8 @@ fn managed_tokens_issue_use_revoke() {
 
 /// SHA-256 hex of a string, via the system tool (tests may shell out).
 fn sha256_of(s: &str) -> String {
-    let out = std::process::Command::new("sha256sum")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .and_then(|mut c| {
-            use std::io::Write;
-            c.stdin.take().unwrap().write_all(s.as_bytes())?;
-            c.wait_with_output()
-        })
+    let mut cmd = std::process::Command::new("sha256sum");
+    let out = common::output_with_input(&mut cmd, s.as_bytes(), common::default_timeout())
         .expect("sha256sum");
     String::from_utf8_lossy(&out.stdout)
         .split_whitespace()
@@ -1154,8 +1142,7 @@ fn legacy_api_token_migrates_to_hash_only_on_cli() {
 #[test]
 fn serve_logs_never_contain_the_token() {
     let repo = Scratch::new("log-audit");
-    let mut server =
-        start_server_with_env(&repo, &[("TISSUE_API_TOKEN", "super-secret-env-token")]);
+    let server = start_server_with_env(&repo, &[("TISSUE_API_TOKEN", "super-secret-env-token")]);
     let addr = server.addr;
     // A read and a failed write (wrong token), then a real write.
     let _ = get(&addr, "/api/issues");
@@ -1172,17 +1159,9 @@ fn serve_logs_never_contain_the_token() {
         Some("super-secret-env-token"),
     );
     assert!(status.contains("201"), "{status}");
-    let _ = server.child.kill();
-    let _ = server.child.wait();
-    let mut logs = String::new();
-    if let Some(mut so) = server.child.stdout.take() {
-        use std::io::Read as _;
-        let _ = so.read_to_string(&mut logs);
-    }
-    if let Some(mut se) = server.child.stderr.take() {
-        use std::io::Read as _;
-        let _ = se.read_to_string(&mut logs);
-    }
+    let (_status, out, err) = server.child.kill_and_collect().expect("kill serve");
+    let mut logs = String::from_utf8_lossy(&out).into_owned();
+    logs.push_str(&String::from_utf8_lossy(&err));
     assert!(
         !logs.contains("super-secret-env-token"),
         "token in serve logs: {logs}"

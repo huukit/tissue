@@ -195,6 +195,12 @@ fn set_filesystem_remote(grepo: &Repo, remote_path: &Path) -> Result<(), String>
 
 fn git_command(args: &[&str]) -> Result<(), String> {
     let out = Command::new("git")
+        // #228: no detached `git maintenance --auto` child (unreaped zombie
+        // under a non-reaping PID 1 in dev sandboxes).
+        .arg("-c")
+        .arg("gc.auto=0")
+        .arg("-c")
+        .arg("maintenance.auto=0")
         .args(args)
         .output()
         .map_err(|e| format!("running git {}: {e}", args.join(" ")))?;

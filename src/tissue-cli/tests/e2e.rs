@@ -5,6 +5,8 @@
 //! propose → tag → approve loop, the stale-proposal fail-safe, the
 //! rejection path, and the commit-per-mutation audit trail.
 
+mod common;
+
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -32,15 +34,13 @@ impl Repo {
         let exe: PathBuf = env!("CARGO_BIN_EXE_tissue").into();
         let mut cmd = Command::new(exe);
         cmd.args(args).current_dir(&self.root).env_remove("EDITOR");
-        cmd.output().expect("run tissue binary")
+        common::output(&mut cmd, common::default_timeout()).expect("run tissue binary")
     }
 
     fn git(&self, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(&self.root)
-            .output()
-            .expect("run git");
+        let mut cmd = Command::new("git");
+        cmd.args(args).current_dir(&self.root);
+        let out = common::output(&mut cmd, common::default_timeout()).expect("run git");
         assert!(out.status.success(), "git {args:?} failed: {out:?}");
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
