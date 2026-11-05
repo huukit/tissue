@@ -363,7 +363,7 @@ function newIssueFormHtml() {
     <label>Body
       <textarea id="new-issue-body" rows="8" aria-label="Issue body">${esc(CREATE_BODY_TEMPLATE)}</textarea>
     </label>
-    <button id="new-issue-create" class="btn">Create issue</button>
+    <button id="new-issue-create" class="btn btn-primary">Create issue</button>
     <button id="new-issue-cancel" class="btn btn-ghost">Cancel</button>
     <p id="new-issue-result" class="edit-result" aria-live="polite"></p>
   </div>`;
@@ -460,7 +460,7 @@ function renderIssueList() {
     if (visible.length === 0) {
         el.innerHTML = `
     ${header}
-    <p class="loading">No issues found in this issue repo.</p>`;
+    <p class="placeholder">No issues found in this issue repo.</p>`;
         (_a = document.getElementById("new-issue-btn")) === null || _a === void 0 ? void 0 : _a.addEventListener("click", () => {
             const f = document.getElementById("new-issue-form");
             if (f)
@@ -492,7 +492,7 @@ function tokenBarHtml() {
     <input type="password" id="api-token" class="token-input"
       placeholder="API token (sessionStorage only)" aria-label="API token"
       autocomplete="off">
-    <button id="token-save" class="btn">${has ? "Update token" : "Save token"}</button>
+    <button id="token-save" class="btn btn-primary">${has ? "Update token" : "Save token"}</button>
     ${has ? `<button id="token-clear" class="btn btn-ghost">Clear</button>` : ""}
     <span class="token-hint">stored in this browser session only — never sent to disk</span>
   </div>`;
@@ -744,7 +744,7 @@ function newProjectFormHtml() {
     return `<div id="new-project-form" class="new-project-form" hidden>
     <input id="new-project-name" type="text" placeholder="name (e.g. ops)" aria-label="Project name">
     <input id="new-project-prefix" type="text" placeholder="prefix (e.g. OPS)" aria-label="Issue-id prefix">
-    <button id="new-project-create" class="btn">Create</button>
+    <button id="new-project-create" class="btn btn-primary">Create</button>
     <button id="new-project-cancel" class="btn btn-ghost">Cancel</button>
     <p id="new-project-result" class="edit-result" aria-live="polite"></p>
   </div>`;
@@ -756,6 +756,10 @@ async function renderReleases() {
         return;
     try {
         const releases = await fetchJson("/api/releases");
+        if (releases.length === 0) {
+            el.innerHTML = `<p class="placeholder">No releases in this issue repo yet.</p>`;
+            return;
+        }
         const rows = releases
             .slice()
             .sort((a, b) => b.id.localeCompare(a.id))
@@ -892,7 +896,7 @@ async function renderSettings() {
       <label>Remote
         <input id="cfg-remote" type="text" placeholder="e.g. /srv/tissue-remote (empty = none)">
       </label>
-      <button id="cfg-save" class="btn">Save settings</button>
+      <button id="cfg-save" class="btn btn-primary">Save settings</button>
       <p id="cfg-result" class="edit-result" aria-live="polite"></p>
       <h3>Current config (whitelisted)</h3>
       <pre id="cfg-view" class="cfg-view">loading…</pre>

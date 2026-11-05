@@ -96,8 +96,16 @@ body {
   min-width: 0;
 }
 
-.loading, .error { color: var(--muted); padding: 2rem 0; text-align: center; }
-.error { color: #b00020; }
+.loading { color: var(--muted); padding: 2rem 0; text-align: center; }
+/* #168: errors are banners — visible, left-aligned, works full-view or inline. */
+.error {
+  color: #b00020;
+  background: #fdecea;
+  border: 1px solid #f5c6cb;
+  border-radius: 6px;
+  padding: 0.6rem 0.9rem;
+  text-align: left;
+}
 
 .view-title { margin: 0 0 1rem; font-size: 1.2rem; }
 .placeholder {
@@ -517,3 +525,95 @@ body {
 .project-row .hint { color: var(--muted, #666); font-size: 0.85em; margin-left: 0.5em; }
 .project-badge { border: 1px solid var(--border, #ccc); border-radius: 3px; padding: 0 4px; font-size: 0.8em; }
 .project-block { margin-bottom: 1em; }
+
+/* ==========================================================================
+   #168 design pass: one plain control system. Rules (docs/gui-style.md):
+   - buttons: .btn (secondary, default), .btn-primary (accent, main action),
+     .btn-danger (destructive), .btn-ghost (quiet); .btn-approve/.btn-reject
+     for proposal decisions. All share padding/radius; :disabled dims.
+   - text controls (input/select/textarea) share one look + focus ring.
+   - every interactive element shows a visible :focus-visible ring.
+   - empty states use .placeholder (dashed card), loading uses .loading,
+     errors use the .error banner above.
+   ========================================================================== */
+
+/* Text-like controls: one consistent look everywhere. */
+input[type="text"], input[type="password"], input[type="search"],
+input[type="number"], select, textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+}
+input[type="text"]:focus, input[type="password"]:focus, input[type="search"]:focus,
+input[type="number"]:focus, select:focus, textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+
+/* Keyboard focus is always visible. */
+a:focus-visible, button:focus-visible, summary:focus-visible,
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Buttons: shared base already on .btn; variants below. */
+.btn {
+  border-radius: 6px;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+}
+.btn:hover { filter: none; background: var(--bg); }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.btn-primary:hover { background: #0a56ad; filter: none; }
+.btn-danger { border-color: #b00020; color: #b00020; background: transparent; }
+.btn-danger:hover { background: #fdecea; }
+.btn-approve { border-color: #2c7a4b; color: #2c7a4b; background: transparent; }
+.btn-approve:hover { background: #eef8f3; }
+.btn-reject { border-color: #b00020; color: #b00020; background: transparent; }
+.btn-reject:hover { background: #fdecea; }
+.btn-ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.btn-ghost:hover { background: var(--bg); color: var(--text); }
+
+/* Toolbar: search grows, action sits at the end, one row. */
+.list-toolbar .search {
+  margin: 0;
+  flex: 1 1 auto;
+  width: auto;
+  max-width: none;
+}
+.list-toolbar .btn { flex: 0 0 auto; }
+
+/* Cards get a quiet hover; rows align. */
+.issue-row { transition: border-color 0.1s; }
+.issue-row:hover { border-color: var(--accent); }
+.proposal-card { background: var(--card); }
+
+/* Forms: labels above controls, full-width controls, consistent gaps. */
+.settings-box input, .settings-box select, .settings-box textarea,
+.new-issue-form input, .new-issue-form textarea, .new-issue-form select,
+.new-project-form input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.new-issue-form label, .settings-box label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.new-issue-form .btn, .settings-box .btn { align-self: flex-start; }
+
+/* Result/error lines under forms keep a stable height. */
+.edit-result { min-height: 1.2em; }

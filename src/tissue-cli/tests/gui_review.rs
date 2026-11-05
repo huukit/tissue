@@ -525,3 +525,38 @@ fn projects_page_data_path() {
         "{status} {body}"
     );
 }
+
+/// #168: the served GUI ships the design-pass control system — focus
+/// rings, button variants, unified text controls, and the .error banner —
+/// and the primary actions use btn-primary.
+#[test]
+fn gui_ships_design_pass_controls() {
+    let repo = Scratch::new("design-pass");
+    let out = repo.tissue(&["create", "IAM-1", "Styled", "--body", "x"]);
+    assert!(out.status.success(), "{out:?}");
+    let server = start_server(&repo);
+    let addr = server.addr;
+
+    let (status, css) = get(&addr, "/style.css");
+    assert!(status.contains("200"), "{status}");
+    for needle in [
+        ":focus-visible",
+        ".btn-primary",
+        ".btn-danger",
+        ".btn:disabled",
+        ".error {",
+    ] {
+        assert!(css.contains(needle), "style.css has {needle}: missing");
+    }
+    let (status, js) = get(&addr, "/app.js");
+    assert!(
+        status.contains("200") && js.contains("btn-primary"),
+        "app.js primary buttons: {status}"
+    );
+    assert!(js.contains("placeholder"), "app.js empty states");
+    let (status, html) = get(&addr, "/");
+    assert!(
+        status.contains("200") && html.contains("style.css"),
+        "index.html links the design-pass stylesheet (btn-primary markup lives in app.ts templates since #178)"
+    );
+}
