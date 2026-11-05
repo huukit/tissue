@@ -15,7 +15,7 @@ use clap::Parser;
 
 use tissue_cli::cli::{Cli, Commands, ProjectCommands, ReleaseCommands, TokenCommands};
 use tissue_core::git;
-use tissue_core::human::{valid_issue_id, IssueFile, IssueStatus};
+use tissue_core::human::{valid_issue_id, IssueFile, IssueStatus, IssueType};
 use tissue_core::releases::Releases;
 use tissue_core::state::Decision;
 use tissue_core::sync::{Actor, Core, Field, ProposalDraft};
@@ -111,6 +111,8 @@ fn run(cli: Cli) -> Result<(), String> {
             title_flag,
             body,
             project,
+            issue_type,
+            parent,
         } => {
             // #145: accept both `tissue create <ID> <TITLE>` and
             // `tissue create <ID> --title <TITLE>`; exactly one required.
@@ -125,13 +127,28 @@ fn run(cli: Cli) -> Result<(), String> {
                     return Err("missing title: pass it positionally or with --title <TEXT>".into())
                 }
             };
-            create(&repo, &id, &title, body, project.as_deref())
+            create(
+                &repo,
+                &id,
+                &title,
+                body,
+                project.as_deref(),
+                issue_type.as_deref(),
+                parent.as_deref(),
+            )
         }
         Commands::List {
             status,
+            issue_type,
             project,
             all,
-        } => list(&repo, &status, project.as_deref(), all),
+        } => list(
+            &repo,
+            &status,
+            issue_type.as_deref(),
+            project.as_deref(),
+            all,
+        ),
         Commands::Show { id } => show(&repo, &id),
         Commands::Sync { id, summary, actor } => sync_cmd(&repo, &id, &summary, &actor),
         Commands::Propose {
@@ -438,9 +455,11 @@ fn propose_cmd(
         "title" => Field::Title,
         "status" => Field::Status,
         "release" => Field::Release,
+        "type" => Field::Type,
+        "parent" => Field::Parent,
         other => {
             return Err(format!(
-                "invalid field `{other}`: expected title, status, or release"
+                "invalid field `{other}`: expected title, status, release, type, or parent"
             ))
         }
     };
@@ -523,12 +542,25 @@ fn create(
     title: &str,
     body: Option<String>,
     project: Option<&str>,
+    issue_type: Option<&str>,
+    parent: Option<&str>,
 ) -> Result<(), String> {
     require_repo(repo)?;
     check_issue_id(id)?;
     // #172/#176: the id prefix must match the chosen (or default) project —
     // no silent fallback prefix.
     tissue_core::projects::validate_create_id(repo, project, id)?;
+    // #211: type (default task) and parent (must exist and be a feature;
+    // only task/bug may have one).
+    let itype = match issue_type {
+        Some(t) => IssueType::parse(t).map_err(|e| format!("type: {e}"))?,
+        None => IssueType::Task,
+    };
+    if let Some(p) = parent {
+        core_for(repo)?
+            .validate_parent(id, itype, p)
+            .map_err(|e| format!("parent: {e}"))?;
+    }
     if issue_dir(repo, id).exists() {
         return Err(format!("issue `{id}` already exists"));
     }
@@ -540,8 +572,14 @@ fn create(
         }
     };
     let now = now_utc();
-    let issue = IssueFile::new(id, title, IssueStatus::Open, &body_text, &now)
+    let mut issue = IssueFile::new(id, title, IssueStatus::Open, &body_text, &now)
         .map_err(|e| format!("building issue: {e}"))?;
+    issue.set_issue_type(itype, &now);
+    if let Some(p) = parent {
+        issue
+            .set_parent(Some(p.to_string()), &now)
+            .map_err(|e| format!("parent: {e}"))?;
+    }
     let dir = issue_dir(repo, id);
     std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     issue
@@ -584,6 +622,7 @@ fn project_prefix(repo: &Path, name: &str) -> Result<String, String> {
 fn list(
     repo: &Path,
     status_filter: &[String],
+    type_filter: Option<&str>,
     project: Option<&str>,
     all: bool,
 ) -> Result<(), String> {
@@ -591,6 +630,13 @@ fn list(
     for f in status_filter {
         parse_status(f)?;
     }
+    // #211: --type filter (feature, task, bug).
+    let type_filter = match type_filter {
+        Some(t) => {
+            Some(IssueType::parse(&t.to_ascii_lowercase()).map_err(|e| format!("type: {e}"))?)
+        }
+        None => None,
+    };
     let prefix = match project {
         Some(name) => Some(project_prefix(repo, name)?),
         None => None,
@@ -636,6 +682,12 @@ fn list(
                         {
                             continue;
                         }
+                        // #211: a creation draft is a task until approved.
+                        if let Some(t) = &type_filter {
+                            if *t != IssueType::Task {
+                                continue;
+                            }
+                        }
                         any = true;
                         println!(
                             "{name}  (pending proposal)  {title}  [ai-proposal] [awaiting decision]"
@@ -655,11 +707,20 @@ fn list(
             }
         }
         if !status_filter.is_empty()
-            && !status_filter
-                .iter()
-                .any(|s| s.eq_ignore_ascii_case(issue.status.as_str()))
+            && !status_filter.iter().any(|s| {
+                // #211: compare parsed statuses so the `closed` alias for
+                // `done` matches migrated issues.
+                parse_status(s)
+                    .map(|st| st == issue.status)
+                    .unwrap_or(false)
+            })
         {
             continue;
+        }
+        if let Some(t) = &type_filter {
+            if issue.issue_type != *t {
+                continue;
+            }
         }
         any = true;
         let flag = if issue.needs_review() {
@@ -672,9 +733,10 @@ fn list(
             .and_then(|core| core.last_touch(&name).map_err(|e| e.to_string()))
             .unwrap_or("human");
         println!(
-            "{}  {}  {}  [{}]{}",
+            "{}  {}  {}  {}  [{}]{}",
             issue.id,
             issue.status.as_str(),
+            issue.issue_type.as_str(),
             issue.title,
             last_touch,
             flag
@@ -690,9 +752,11 @@ fn parse_status(s: &str) -> Result<IssueStatus, String> {
     match s.to_ascii_lowercase().as_str() {
         "open" => Ok(IssueStatus::Open),
         "in-progress" => Ok(IssueStatus::InProgress),
-        "closed" => Ok(IssueStatus::Closed),
+        "review" => Ok(IssueStatus::Review),
+        "done" | "closed" => Ok(IssueStatus::Done),
+        "rejected" => Ok(IssueStatus::Rejected),
         other => Err(format!(
-            "invalid status `{other}`: expected open, in-progress, or closed"
+            "invalid status `{other}`: expected open, in-progress, review, done, or rejected"
         )),
     }
 }
@@ -724,7 +788,12 @@ fn show(repo: &Path, id: &str) -> Result<(), String> {
     };
     println!("id:      {}", issue.id);
     println!("title:   {}", issue.title);
+    println!("type:    {}", issue.issue_type.as_str());
     println!("status:  {}", issue.status.as_str());
+    match &issue.parent {
+        Some(p) => println!("parent:  {p}"),
+        None => println!("parent:  (none)"),
+    }
     match &issue.release {
         Some(r) => println!("release: {r}"),
         None => println!("release: (unscheduled)"),
@@ -804,7 +873,11 @@ mod tests {
     fn parse_status_accepts_known_values() {
         assert!(parse_status("open").is_ok());
         assert!(parse_status("IN-PROGRESS").is_ok());
-        assert!(parse_status("closed").is_ok());
+        assert!(parse_status("review").is_ok());
+        assert!(parse_status("done").is_ok());
+        assert!(parse_status("closed").is_ok(), "legacy alias for done");
+        assert!(parse_status("rejected").is_ok());
+        assert_eq!(parse_status("closed").unwrap(), IssueStatus::Done);
         assert!(parse_status("nope").is_err());
     }
 }

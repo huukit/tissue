@@ -117,12 +117,27 @@ async function fetchAuthed(url) {
     }
     return data;
 }
+/** #211: the workflow statuses and issue types. */
+const STATUSES = ["open", "in-progress", "review", "done", "rejected"];
+const TYPES = ["feature", "task", "bug"];
 function statusClass(status) {
     if (status === "open")
         return "status-open";
     if (status === "in-progress")
         return "status-in-progress";
-    return "status-closed";
+    if (status === "review")
+        return "status-review";
+    if (status === "done")
+        return "status-done";
+    if (status === "rejected")
+        return "status-rejected";
+    return "status-closed"; // legacy/unknown fallback
+}
+/** #211: type badge shown on every list row. */
+function typeBadgeHtml(issue) {
+    var _a;
+    const t = (_a = issue.type) !== null && _a !== void 0 ? _a : "task";
+    return `<span class="badge type-badge type-${esc(t)}" title="issue type">${esc(t)}</span>`;
 }
 function badgeHtml(tags) {
     return tags.includes(NEEDS_REVIEW)
@@ -143,6 +158,7 @@ function rowHtml(issue) {
     <span class="issue-id">${esc(issue.id)}</span>
     <a class="issue-link issue-title" href="#/issue/${encodeURIComponent(issue.id)}">${title}</a>
     <span class="badge project-badge" title="project (id prefix)">${esc(projectOf(issue.id))}</span>
+    ${typeBadgeHtml(issue)}
     <span class="status ${statusClass(issue.status)}">${esc(issue.status)}</span>
     ${lastTouchBadge(issue)}
     ${badgeHtml(issue.tags)}
@@ -284,14 +300,22 @@ function activeStatus() {
     const m = /[#?]status=([^&]+)/.exec(window.location.hash);
     return m ? decodeURIComponent(m[1]) : "";
 }
+/** #211: ?type= filter param. */
+function activeType() {
+    const m = /[#?]type=([^&]+)/.exec(window.location.hash);
+    return m ? decodeURIComponent(m[1]) : "";
+}
 function applyFilters(issues) {
     const project = activeProject();
     const status = activeStatus();
+    const type = activeType();
     let out = issues;
     if (project)
         out = out.filter((i) => projectOf(i.id) === project);
     if (status)
         out = out.filter((i) => i.status === status);
+    if (type)
+        out = out.filter((i) => { var _a; return ((_a = i.type) !== null && _a !== void 0 ? _a : "task") === type; });
     return out;
 }
 function searchMatches(issue, q) {
@@ -303,6 +327,41 @@ function searchMatches(issue, q) {
 }
 function searchInputHtml() {
     return `<input type="search" id="search" class="search" placeholder="Search id or title…" aria-label="Search issues">`;
+}
+/** #211: type/status filter selects for the list toolbar (hash params). */
+function filterSelectHtml() {
+    const status = activeStatus();
+    const type = activeType();
+    return `<select id="filter-type" class="filter-select" aria-label="Filter by type">
+      <option value="">all types</option>
+      ${TYPES.map((t) => `<option value="${t}"${t === type ? " selected" : ""}>${t}</option>`).join("")}
+    </select>
+    <select id="filter-status" class="filter-select" aria-label="Filter by status">
+      <option value="">all statuses</option>
+      ${STATUSES.map((s) => `<option value="${s}"${s === status ? " selected" : ""}>${s}</option>`).join("")}
+    </select>`;
+}
+/** #211: toolbar filter selects write their hash param and re-route. */
+function bindFilters() {
+    var _a;
+    for (const [id, param] of [
+        ["filter-type", "type"],
+        ["filter-status", "status"],
+    ]) {
+        (_a = document.getElementById(id)) === null || _a === void 0 ? void 0 : _a.addEventListener("change", (e) => {
+            var _a;
+            const v = e.target.value;
+            const hash = window.location.hash || "#/issues";
+            const base = hash.split("?")[0] || "#/issues";
+            const params = new URLSearchParams((_a = hash.split("?")[1]) !== null && _a !== void 0 ? _a : "");
+            if (v)
+                params.set(param, v);
+            else
+                params.delete(param);
+            const qs = params.toString();
+            window.location.hash = qs ? `${base}?${qs}` : base;
+        });
+    }
 }
 function bindSearch() {
     const input = document.getElementById("search");
@@ -345,6 +404,11 @@ function newIssueFormHtml() {
     const options = projects
         .map((p) => `<option value="${esc(p.prefix)}"${p.prefix === prefix ? " selected" : ""}>${esc(p.name)} (${esc(p.prefix)})</option>`)
         .join("");
+    // #211: type picker + optional parent picker (features among all issues).
+    const featureOptions = allIssues
+        .filter((i) => { var _a; return ((_a = i.type) !== null && _a !== void 0 ? _a : "task") === "feature"; })
+        .map((i) => `<option value="${esc(i.id)}">${esc(i.id)} — ${esc(i.title)}</option>`)
+        .join("");
     return `<div class="new-issue-form" id="new-issue-form" hidden>
     <h3>New issue</h3>
     <label>Project
@@ -353,6 +417,16 @@ function newIssueFormHtml() {
     <label>Id
       <input id="new-issue-id" type="text" value="${esc(prefix + "-" + next)}"
              aria-label="Issue id (PREFIX-number)">
+    </label>
+    <label>Type
+      <select id="new-issue-type" aria-label="Issue type">
+        ${TYPES.map((t) => `<option value="${t}"${t === "task" ? " selected" : ""}>${t}</option>`).join("")}
+      </select>
+    </label>
+    <label>Parent feature (optional — task/bug only)
+      <select id="new-issue-parent" aria-label="Parent feature">
+        <option value="">(none)</option>${featureOptions}
+      </select>
     </label>
     <label>Title
       <input id="new-issue-title" type="text" placeholder="One line" aria-label="Issue title">
@@ -383,6 +457,8 @@ function bindNewIssue() {
     const result = document.getElementById("new-issue-result");
     const idEl = document.getElementById("new-issue-id");
     const projectEl = document.getElementById("new-issue-project");
+    const typeEl = document.getElementById("new-issue-type");
+    const parentEl = document.getElementById("new-issue-parent");
     const titleEl = document.getElementById("new-issue-title");
     const bodyEl = document.getElementById("new-issue-body");
     (_a = document.getElementById("new-issue-cancel")) === null || _a === void 0 ? void 0 : _a.addEventListener("click", () => {
@@ -418,12 +494,17 @@ function bindNewIssue() {
         result.textContent = "…";
         try {
             const selected = cachedProjects.find((p) => p.prefix === projectPrefix);
+            // #211: type + parent flow through create; a feature has no parent.
+            const itype = typeEl ? typeEl.value : "task";
+            const parent = itype === "feature" ? undefined : (parentEl === null || parentEl === void 0 ? void 0 : parentEl.value) || undefined;
             await postJson("/api/issues", {
                 id,
                 title,
                 body: bodyEl ? bodyEl.value : undefined,
                 actor: "human:gui",
                 project: selected === null || selected === void 0 ? void 0 : selected.name,
+                type: itype,
+                parent,
             });
             // Created: navigate to the new issue's detail.
             window.location.hash = `#/issue/${encodeURIComponent(id)}`;
@@ -450,6 +531,7 @@ function renderIssueList() {
     ${tokenBarHtml()}
     <div class="list-toolbar">
       ${searchInputHtml()}
+      ${filterSelectHtml()}
       <button id="new-issue-btn" class="btn" title="Create an issue (needs the API token)">+ New issue</button>
     </div>
     ${newIssueFormHtml()}`;
@@ -465,6 +547,7 @@ function renderIssueList() {
         });
         bindNewIssue();
         bindSearch();
+        bindFilters();
         return;
     }
     el.innerHTML = `
@@ -481,6 +564,7 @@ function renderIssueList() {
     });
     bindNewIssue();
     bindSearch();
+    bindFilters();
 }
 /** #199: outside Settings, never render a token input — browsers/password
  *  managers autofill password fields, leaking the token onto every view.
@@ -700,7 +784,8 @@ async function renderProjects() {
             const p = projectOf(i.id);
             const c = (_a = counts.get(p)) !== null && _a !== void 0 ? _a : { open: 0, review: 0, total: 0 };
             c.total += 1;
-            if (i.status === "open" || i.status === "in-progress")
+            // #211: open/in-progress/review all count as active work.
+            if (i.status === "open" || i.status === "in-progress" || i.status === "review")
                 c.open += 1;
             if (i.tags.includes("needs-review"))
                 c.review += 1;
@@ -1299,7 +1384,7 @@ function renderMarkdown(src) {
     return out.join("\n");
 }
 function editFormHtml(issue) {
-    var _a;
+    var _a, _b;
     return `
     <details class="edit-box">
       <summary>Edit front matter</summary>
@@ -1307,15 +1392,22 @@ function editFormHtml(issue) {
         <label>Title
           <input id="edit-title" type="text" value="${esc(issue.title)}">
         </label>
-        <label>Status
-          <select id="edit-status">
-            ${["open", "in-progress", "closed"]
-        .map((s) => `<option value="${s}"${s === issue.status ? " selected" : ""}>${s}</option>`)
-        .join("")}
+        <label>Type
+          <select id="edit-type">
+            ${TYPES.map((t) => { var _a; return `<option value="${t}"${t === ((_a = issue.type) !== null && _a !== void 0 ? _a : "task") ? " selected" : ""}>${t}</option>`; }).join("")}
           </select>
         </label>
+        <label>Status
+          <select id="edit-status">
+            ${STATUSES.map((s) => `<option value="${s}"${s === issue.status ? " selected" : ""}>${s}</option>`).join("")}
+          </select>
+        </label>
+        <label>Parent
+          <input id="edit-parent" type="text" value="${esc((_a = issue.parent) !== null && _a !== void 0 ? _a : "")}"
+                 placeholder="feature id, e.g. IAM-42 (empty = none; task/bug only)">
+        </label>
         <label>Release
-          <input id="edit-release" type="text" value="${esc((_a = issue.release) !== null && _a !== void 0 ? _a : "")}"
+          <input id="edit-release" type="text" value="${esc((_b = issue.release) !== null && _b !== void 0 ? _b : "")}"
                  placeholder="e.g. v1.2.0 (empty = unscheduled)">
         </label>
         <button id="edit-submit">Save changes</button>
@@ -1331,12 +1423,18 @@ function wireEditForm(issue) {
     if (!submit || !sync || !result)
         return;
     submit.addEventListener("click", async () => {
-        var _a;
+        var _a, _b, _c;
         result.textContent = "…";
         const title = document.getElementById("edit-title").value;
+        const itype = document.getElementById("edit-type").value;
         const status = document.getElementById("edit-status").value;
+        const parent = document.getElementById("edit-parent").value.trim();
         const release = document.getElementById("edit-release").value;
-        const changed = title !== issue.title || status !== issue.status || (release || "") !== ((_a = issue.release) !== null && _a !== void 0 ? _a : "");
+        const changed = title !== issue.title ||
+            itype !== ((_a = issue.type) !== null && _a !== void 0 ? _a : "task") ||
+            status !== issue.status ||
+            parent !== ((_b = issue.parent) !== null && _b !== void 0 ? _b : "") ||
+            (release || "") !== ((_c = issue.release) !== null && _c !== void 0 ? _c : "");
         if (!changed) {
             result.textContent = "No changes — nothing to save.";
             return;
@@ -1347,7 +1445,9 @@ function wireEditForm(issue) {
             await postJson(`/api/issues/${encodeURIComponent(issue.id)}/edit`, {
                 expected_revision: issue.revision,
                 title,
+                type: itype,
                 status,
+                parent,
                 release,
                 actor: "human:gui",
             });
@@ -1442,7 +1542,7 @@ function bindDetailTabs(id, active) {
  * (front matter + body, editable) on one side, the agent stream,
  * proposals, and last-touch state on the other. */
 async function renderDetail(id, tab = "human") {
-    var _a;
+    var _a, _b, _c;
     const el = app();
     if (!el)
         return;
@@ -1452,7 +1552,14 @@ async function renderDetail(id, tab = "human") {
         const fm = [
             ["id", esc(issue.id)],
             ["project", `<span class="badge project-badge">${esc(projectOf(issue.id))}</span> <span class="hint">(immutable — the id prefix is the identity, #172)</span>`],
+            ["type", typeBadgeHtml(issue)],
             ["status", `<span class="status ${statusClass(issue.status)}">${esc(issue.status)}</span>`],
+            [
+                "parent",
+                issue.parent
+                    ? `<a class="issue-link" href="#/issue/${encodeURIComponent(issue.parent)}">${esc(issue.parent)}</a>`
+                    : "—",
+            ],
             ["last touch", lastTouchBadge(issue)],
             ["release", esc((_a = issue.release) !== null && _a !== void 0 ? _a : "—")],
             ["tags", issue.tags.length ? esc(issue.tags.join(", ")) : "—"],
@@ -1461,6 +1568,25 @@ async function renderDetail(id, tab = "human") {
         ]
             .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
             .join("");
+        // #211: a feature lists its child tasks/bugs (derived from `parent`).
+        let children = [];
+        if (((_b = issue.type) !== null && _b !== void 0 ? _b : "task") === "feature") {
+            try {
+                const fresh = await fetchJson("/api/issues");
+                children = fresh.issues.filter((i) => i.parent === issue.id);
+            }
+            catch (_d) {
+                children = allIssues.filter((i) => i.parent === issue.id);
+            }
+        }
+        const childrenHtml = ((_c = issue.type) !== null && _c !== void 0 ? _c : "task") === "feature"
+            ? `<section class="children">
+        <h3>Tasks / bugs in this feature (${children.length})</h3>
+        ${children.length > 0
+                ? `<ul class="issue-list">${children.map(rowHtml).join("")}</ul>`
+                : `<p class="placeholder">No children yet — create a task or bug with parent ${esc(issue.id)}.</p>`}
+      </section>`
+            : "";
         // AI side (#170): pending proposals + the agent stream (#98 AC4, all
         // record types, collapsed by default — heavy agent activity must not
         // break readability, #3).
@@ -1468,14 +1594,14 @@ async function renderDetail(id, tab = "human") {
         try {
             proposals = await fetchJson(`/api/issues/${encodeURIComponent(id)}/proposals`);
         }
-        catch (_b) {
+        catch (_e) {
             // unreadable stream: the proposals section says so below
         }
         let records = [];
         try {
             records = await fetchJson(`/api/issues/${encodeURIComponent(id)}/records`);
         }
-        catch (_c) {
+        catch (_f) {
             // no stream or unreadable: the timeline section says so below
         }
         const timelineRows = records
@@ -1533,6 +1659,7 @@ async function renderDetail(id, tab = "human") {
       ${timeline}`;
         const humanPane = `
       <dl class="front-matter">${fm}</dl>
+      ${childrenHtml}
       ${editFormHtml(issue)}
       <div class="body">${renderMarkdown(issue.body)}</div>`;
         el.innerHTML = `
@@ -1565,8 +1692,13 @@ function updateNav(view) {
         a.classList.toggle("active", a.dataset.view === view);
     });
     document.querySelectorAll(".filter-link").forEach((a) => {
-        var _a;
-        a.classList.toggle("active", ((_a = a.dataset.status) !== null && _a !== void 0 ? _a : "") === activeStatus());
+        if (a.dataset.status !== undefined) {
+            a.classList.toggle("active", a.dataset.status === activeStatus());
+        }
+        // #211: type filter links.
+        if (a.dataset.type !== undefined) {
+            a.classList.toggle("active", a.dataset.type === activeType());
+        }
     });
 }
 async function loadIssues() {

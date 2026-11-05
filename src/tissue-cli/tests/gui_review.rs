@@ -895,3 +895,103 @@ fn settings_agent_note_has_hosted_example() {
         "proxy guidance: app.js"
     );
 }
+
+/// #211: the served GUI carries the type/parent/workflow UI — type badge on
+/// rows, type+status filter selects in the list toolbar, type/parent pickers
+/// on "+ New issue", the five-state status dropdown + parent field in the
+/// edit form, the feature children section — and the issue JSON carries
+/// type/parent; the sidebar has the new status links and a type filter.
+#[test]
+fn gui_ships_types_and_workflow_211() {
+    let repo = Scratch::new("gui-211");
+    assert!(repo
+        .tissue(&[
+            "create",
+            "IAM-1",
+            "Login flow",
+            "--type",
+            "feature",
+            "--body",
+            "b"
+        ])
+        .status
+        .success());
+    assert!(repo
+        .tissue(&[
+            "create",
+            "IAM-2",
+            "Redirect loop",
+            "--type",
+            "bug",
+            "--parent",
+            "IAM-1",
+            "--body",
+            "b"
+        ])
+        .status
+        .success());
+    let server = start_server(&repo);
+    let addr = server.addr;
+
+    // Issue JSON carries type/parent (list + detail).
+    let (status, body) = get(&addr, "/api/issues");
+    assert!(status.contains("200"), "{status} {body}");
+    assert!(
+        body.contains("\"type\":\"feature\"")
+            && body.contains("\"type\":\"bug\"")
+            && body.contains("\"parent\":\"IAM-1\""),
+        "list JSON: {body}"
+    );
+    let (status, body) = get(&addr, "/api/issues/IAM-2");
+    assert!(
+        status.contains("200")
+            && body.contains("\"type\":\"bug\"")
+            && body.contains("\"parent\":\"IAM-1\""),
+        "detail JSON: {body}"
+    );
+
+    // Served app.js: new-issue pickers, toolbar filters, edit form fields,
+    // type badge, feature children, five workflow statuses.
+    let (status, js) = get(&addr, "/app.js");
+    assert!(status.contains("200"), "app.js: {status}");
+    for needle in [
+        "new-issue-type",
+        "new-issue-parent",
+        "filter-type",
+        "filter-status",
+        "edit-type",
+        "edit-parent",
+        "edit-status",
+        "type-badge",
+        "\"rejected\"",
+        "\"review\"",
+        "Tasks / bugs in this feature",
+    ] {
+        assert!(js.contains(needle), "app.js has {needle}");
+    }
+
+    // Shell: sidebar status links use the new enum; type filter block exists.
+    let (status, html) = get(&addr, "/");
+    assert!(status.contains("200"), "{status}");
+    for needle in [
+        "#/issues?status=review",
+        "#/issues?status=done",
+        "#/issues?status=rejected",
+        "#/issues?type=feature",
+        "#/issues?type=bug",
+    ] {
+        assert!(html.contains(needle), "index.html has {needle}");
+    }
+
+    // Styles: new status colors + type badge.
+    let (status, css) = get(&addr, "/style.css");
+    assert!(status.contains("200"), "{status}");
+    for needle in [
+        ".status-review",
+        ".status-done",
+        ".status-rejected",
+        ".type-badge",
+    ] {
+        assert!(css.contains(needle), "style.css has {needle}");
+    }
+}

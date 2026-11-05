@@ -10,6 +10,10 @@
   --status-open: #1b7f3b;
   --status-progress: #0b62c4;
   --status-closed: #8a8a8a;
+  /* #211: workflow statuses. */
+  --status-review: #b26a00;
+  --status-done: #146c2e;
+  --status-rejected: #b02a2a;
 }
 
 * { box-sizing: border-box; }
@@ -154,6 +158,16 @@ body {
 .status-open { color: var(--status-open); }
 .status-in-progress { color: var(--status-progress); }
 .status-closed { color: var(--status-closed); }
+/* #211: review / done / rejected. */
+.status-review { color: var(--status-review); }
+.status-done { color: var(--status-done); }
+.status-rejected { color: var(--status-rejected); }
+
+/* #211: type badge + toolbar filter selects. */
+.type-badge { border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; font-size: 0.8em; }
+.type-feature { color: #6a3fb5; border-color: #6a3fb5; }
+.type-bug { color: #b02a2a; border-color: #b02a2a; }
+.list-toolbar .filter-select { flex: 0 0 auto; margin: 0; }
 
 .badge-review {
   font-size: 0.75rem;

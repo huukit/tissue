@@ -738,7 +738,7 @@ fn gui_edit_endpoint_and_conflict_handling() {
     );
     assert!(status.contains("400"), "bad status: {status} body {body}");
     assert!(
-        body.contains("open, in-progress, closed"),
+        body.contains("open, in-progress, review, done, rejected"),
         "enum hint: {body}"
     );
 }
@@ -1378,4 +1378,181 @@ fn api_error_bodies_contain_no_absolute_paths() {
     );
     assert!(status.contains("400") || status.contains("409"), "{status}");
     assert!(!body.contains("/tmp/"), "leaked fs path: {body}");
+}
+
+/// #211 (decision 15): types + parent + workflow flow through the API —
+/// create with type/parent, summary/detail JSON carry them, the edit
+/// endpoint enforces workflow transitions and parent validation, and
+/// agents can propose type/parent/status like any field.
+#[test]
+fn issue_types_and_workflow_via_api() {
+    let repo = Scratch::new("types-211");
+    repo.set_token("test-token-1");
+    let server = start_server(&repo);
+    let addr = server.addr;
+
+    // Create a feature + a child bug through the API.
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues",
+        r#"{"id":"IAM-1","title":"Login flow","type":"feature","actor":"human:gui"}"#,
+        Some("test-token-1"),
+    );
+    assert!(status.contains("201"), "create feature: {status} {body}");
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues",
+        r#"{"id":"IAM-2","title":"Redirect loop","type":"bug","parent":"IAM-1","actor":"human:gui"}"#,
+        Some("test-token-1"),
+    );
+    assert!(status.contains("201"), "create child bug: {status} {body}");
+    let issue = std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-2/issue.md")).unwrap();
+    assert!(
+        issue.contains("type: bug") && issue.contains("parent: IAM-1"),
+        "{issue}"
+    );
+
+    // Summary + detail JSON carry type/parent.
+    let (status, body) = get(&addr, "/api/issues");
+    assert!(status.contains("200"), "{status}");
+    assert!(
+        body.contains("\"type\":\"feature\"") && body.contains("\"parent\":\"IAM-1\""),
+        "summaries carry type/parent: {body}"
+    );
+    let (status, body) = get(&addr, "/api/issues/IAM-2");
+    assert!(
+        status.contains("200")
+            && body.contains("\"type\":\"bug\"")
+            && body.contains("\"parent\":\"IAM-1\""),
+        "{body}"
+    );
+
+    // Parent validation through the API: missing / non-feature parent -> 400.
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues",
+        r#"{"id":"IAM-3","title":"x","type":"bug","parent":"IAM-99","actor":"human:gui"}"#,
+        Some("test-token-1"),
+    );
+    assert!(
+        status.contains("400") && body.contains("does not exist"),
+        "{status} {body}"
+    );
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues",
+        r#"{"id":"IAM-3","title":"x","type":"feature","parent":"IAM-1","actor":"human:gui"}"#,
+        Some("test-token-1"),
+    );
+    assert!(
+        status.contains("400") && body.contains("feature cannot have a parent"),
+        "{status} {body}"
+    );
+
+    // Edit endpoint: read revision, then a legal transition open->in-progress.
+    let (_, body) = get(&addr, "/api/issues/IAM-1");
+    let rev: u64 = {
+        let s = body.split("\"revision\":").nth(1).expect("revision");
+        s.split(|c: char| !c.is_ascii_digit())
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues/IAM-1/edit",
+        r#"{"expected_revision":1,"status":"in-progress","actor":"human:gui"}"#,
+        Some("test-token-1"),
+    );
+    assert!(status.contains("200"), "legal transition: {status} {body}");
+    assert!(rev >= 1);
+    // Illegal transition in-progress->done (must go via review) -> 400.
+    let (_, body) = get(&addr, "/api/issues/IAM-1");
+    let rev2: u64 = {
+        let s = body.split("\"revision\":").nth(1).expect("revision");
+        s.split(|c: char| !c.is_ascii_digit())
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues/IAM-1/edit",
+        &format!(r#"{{"expected_revision":{rev2},"status":"done","actor":"human:gui"}}"#),
+        Some("test-token-1"),
+    );
+    assert!(
+        status.contains("400") && body.contains("illegal status transition"),
+        "{status} {body}"
+    );
+    // Legal: in-progress -> review -> done (closed alias accepted for done).
+    let (_, body) = get(&addr, "/api/issues/IAM-1");
+    let rev3: u64 = {
+        let s = body.split("\"revision\":").nth(1).expect("revision");
+        s.split(|c: char| !c.is_ascii_digit())
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues/IAM-1/edit",
+        &format!(r#"{{"expected_revision":{rev3},"status":"review","actor":"human:gui"}}"#),
+        Some("test-token-1"),
+    );
+    assert!(status.contains("200"), "-> review: {status} {body}");
+    let (_, body) = get(&addr, "/api/issues/IAM-1");
+    let rev4: u64 = {
+        let s = body.split("\"revision\":").nth(1).expect("revision");
+        s.split(|c: char| !c.is_ascii_digit())
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues/IAM-1/edit",
+        &format!(r#"{{"expected_revision":{rev4},"status":"closed","actor":"human:gui"}}"#),
+        Some("test-token-1"),
+    );
+    assert!(
+        status.contains("200"),
+        "closed alias -> done: {status} {body}"
+    );
+    let issue = std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-1/issue.md")).unwrap();
+    assert!(
+        issue.contains("status: done") && !issue.contains("status: closed"),
+        "{issue}"
+    );
+
+    // Edit type/parent through the API (task IAM-2 -> stays bug, clear parent).
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues/IAM-2/edit",
+        r#"{"expected_revision":1,"parent":"","actor":"human:gui"}"#,
+        Some("test-token-1"),
+    );
+    assert!(status.contains("200"), "clear parent: {status} {body}");
+    let issue = std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-2/issue.md")).unwrap();
+    assert!(!issue.contains("parent:"), "parent cleared: {issue}");
+
+    // Agent proposes type via the API; human approves via CLI; applied.
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues/IAM-2/propose",
+        r#"{"field":"type","current":"bug","proposed":"task","rationale":"triage","actor":"agent:dev-1"}"#,
+        Some("test-token-1"),
+    );
+    assert!(status.contains("201"), "propose type: {status} {body}");
+    let out = repo.tissue(&["approve", "IAM-2", "prop-01", "--actor", "human:gui"]);
+    assert!(out.status.success(), "approve: {out:?}");
+    let issue = std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-2/issue.md")).unwrap();
+    assert!(
+        issue.contains("type: task"),
+        "type applied on approve: {issue}"
+    );
 }

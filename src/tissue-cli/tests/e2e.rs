@@ -629,3 +629,254 @@ fn list_and_show_handle_proposal_only_issue_dirs() {
         "marker gone after approval: {list}"
     );
 }
+
+/// #211 (decision 15): issue types + parent + workflow statuses end to end —
+/// create --type/--parent with validation, list --type/--status, show, the
+/// closed→done read migration, and propose/approve of type+status with the
+/// transition rules enforced at approval.
+#[test]
+fn issue_types_and_workflow_e2e() {
+    let repo = Repo::new("types-211");
+    init(&repo);
+
+    // Feature + child bug; parent validation is enforced at create.
+    let out = repo.tissue(&[
+        "create",
+        "IAM-1",
+        "Login flow",
+        "--type",
+        "feature",
+        "--body",
+        "b",
+    ]);
+    Repo::assert_success(&out, "create feature");
+    let issue = repo.read_issue("IAM-1");
+    assert!(issue.contains("type: feature"), "{issue}");
+    assert!(!issue.contains("parent:"), "feature has no parent: {issue}");
+
+    let out = repo.tissue(&[
+        "create",
+        "IAM-2",
+        "Redirect loop",
+        "--type",
+        "bug",
+        "--parent",
+        "IAM-1",
+        "--body",
+        "b",
+    ]);
+    Repo::assert_success(&out, "create bug with parent");
+    let issue = repo.read_issue("IAM-2");
+    assert!(
+        issue.contains("type: bug") && issue.contains("parent: IAM-1"),
+        "{issue}"
+    );
+
+    // Default type is task.
+    create(&repo, "IAM-3", "Plain task");
+    assert!(
+        repo.read_issue("IAM-3").contains("type: task"),
+        "default type"
+    );
+
+    // Parent validation: must exist, be a feature, and only task/bug may set it.
+    let out = repo.tissue(&[
+        "create", "IAM-4", "x", "--type", "bug", "--parent", "IAM-99", "--body", "b",
+    ]);
+    Repo::assert_failure(&out, "missing parent");
+    assert!(
+        Repo::stderr(&out).contains("does not exist"),
+        "{}",
+        Repo::stderr(&out)
+    );
+    let out = repo.tissue(&[
+        "create", "IAM-4", "x", "--type", "bug", "--parent", "IAM-3", "--body", "b",
+    ]);
+    Repo::assert_failure(&out, "parent not a feature");
+    assert!(
+        Repo::stderr(&out).contains("not a feature"),
+        "{}",
+        Repo::stderr(&out)
+    );
+    let out = repo.tissue(&[
+        "create", "IAM-4", "x", "--type", "feature", "--parent", "IAM-1", "--body", "b",
+    ]);
+    Repo::assert_failure(&out, "feature cannot have a parent");
+    let out = repo.tissue(&["create", "IAM-4", "x", "--type", "epic", "--body", "b"]);
+    Repo::assert_failure(&out, "invalid type");
+
+    // list --type / --status; show prints type + parent.
+    let out = repo.tissue(&["list", "--type", "bug"]);
+    Repo::assert_success(&out, "list --type bug");
+    let list = Repo::stdout(&out);
+    assert!(
+        list.contains("IAM-2") && !list.contains("IAM-1") && !list.contains("IAM-3"),
+        "{list}"
+    );
+    assert!(list.contains("bug"), "type column: {list}");
+    let out = repo.tissue(&["list", "--type", "feature"]);
+    assert!(Repo::stdout(&out).contains("IAM-1"), "feature listed");
+    let out = repo.tissue(&["list", "--status", "done"]);
+    Repo::assert_success(&out, "list --status done (empty ok)");
+    let out = repo.tissue(&["show", "IAM-2"]);
+    let shown = Repo::stdout(&out);
+    assert!(
+        shown.contains("type:    bug") && shown.contains("parent:  IAM-1"),
+        "{shown}"
+    );
+
+    // Migration: a legacy `status: closed` issue reads as done, file untouched.
+    let legacy_dir = repo.root.join(".tissue/issues/IAM-9");
+    std::fs::create_dir_all(&legacy_dir).unwrap();
+    let legacy = "---\nid: IAM-9\ntitle: Legacy closed\nstatus: closed\ncreated: 2026-10-08T09:00:00Z\nupdated: 2026-10-08T09:00:00Z\n---\n\nbody\n";
+    std::fs::write(legacy_dir.join("issue.md"), legacy).unwrap();
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-m", "legacy issue"]);
+    let out = repo.tissue(&["show", "IAM-9"]);
+    let shown = Repo::stdout(&out);
+    assert!(
+        shown.contains("status:  done"),
+        "closed migrates to done: {shown}"
+    );
+    assert_eq!(repo.read_issue("IAM-9"), legacy, "no data rewrite on read");
+    let out = repo.tissue(&["list", "--status", "done"]);
+    assert!(
+        Repo::stdout(&out).contains("IAM-9"),
+        "done filter matches legacy closed"
+    );
+    let out = repo.tissue(&["list", "--status", "closed"]);
+    assert!(
+        Repo::stdout(&out).contains("IAM-9"),
+        "closed alias filter works"
+    );
+
+    // Workflow via propose/approve: open -> in-progress -> review -> done;
+    // open -> done directly is refused at approval.
+    let out = repo.tissue(&[
+        "propose",
+        "IAM-3",
+        "--field",
+        "status",
+        "--current",
+        "open",
+        "--proposed",
+        "done",
+        "--actor",
+        "agent:e2e",
+    ]);
+    Repo::assert_success(&out, "propose open->done (propose ok, apply must refuse)");
+    let pid = proposal_id_from(&out);
+    let out = repo.tissue(&["approve", "IAM-3", &pid, "--actor", "human:e2e"]);
+    Repo::assert_failure(&out, "illegal transition refused at approve");
+    assert!(
+        Repo::stderr(&out).contains("illegal status transition"),
+        "{}",
+        Repo::stderr(&out)
+    );
+
+    for (cur, next) in [
+        ("open", "in-progress"),
+        ("in-progress", "review"),
+        ("review", "done"),
+    ] {
+        let out = repo.tissue(&[
+            "propose",
+            "IAM-3",
+            "--field",
+            "status",
+            "--current",
+            cur,
+            "--proposed",
+            next,
+            "--actor",
+            "agent:e2e",
+        ]);
+        Repo::assert_success(&out, "propose {cur}->{next}");
+        let pid = proposal_id_from(&out);
+        let out = repo.tissue(&["approve", "IAM-3", &pid, "--actor", "human:e2e"]);
+        Repo::assert_success(&out, "approve {cur}->{next}");
+    }
+    let issue = repo.read_issue("IAM-3");
+    assert!(issue.contains("status: done"), "chain applied: {issue}");
+
+    // Agents can propose type/parent like any field; approve applies them.
+    let out = repo.tissue(&[
+        "propose",
+        "IAM-3",
+        "--field",
+        "type",
+        "--current",
+        "task",
+        "--proposed",
+        "bug",
+        "--actor",
+        "agent:e2e",
+    ]);
+    Repo::assert_success(&out, "propose type");
+    let pid = proposal_id_from(&out);
+    let out = repo.tissue(&["approve", "IAM-3", &pid, "--actor", "human:e2e"]);
+    Repo::assert_success(&out, "approve type");
+    let out = repo.tissue(&[
+        "propose",
+        "IAM-3",
+        "--field",
+        "parent",
+        "--current",
+        "",
+        "--proposed",
+        "IAM-1",
+        "--actor",
+        "agent:e2e",
+    ]);
+    Repo::assert_success(&out, "propose parent");
+    let pid = proposal_id_from(&out);
+    let out = repo.tissue(&["approve", "IAM-3", &pid, "--actor", "human:e2e"]);
+    Repo::assert_success(&out, "approve parent");
+    let issue = repo.read_issue("IAM-3");
+    assert!(
+        issue.contains("type: bug") && issue.contains("parent: IAM-1"),
+        "{issue}"
+    );
+
+    // rejected -> open reopen is legal.
+    let out = repo.tissue(&[
+        "propose",
+        "IAM-2",
+        "--field",
+        "status",
+        "--current",
+        "open",
+        "--proposed",
+        "rejected",
+        "--actor",
+        "agent:e2e",
+    ]);
+    Repo::assert_success(&out, "propose reject");
+    let pid = proposal_id_from(&out);
+    Repo::assert_success(
+        &repo.tissue(&["approve", "IAM-2", &pid, "--actor", "human:e2e"]),
+        "approve rejected",
+    );
+    let out = repo.tissue(&[
+        "propose",
+        "IAM-2",
+        "--field",
+        "status",
+        "--current",
+        "rejected",
+        "--proposed",
+        "open",
+        "--actor",
+        "agent:e2e",
+    ]);
+    Repo::assert_success(&out, "propose reopen");
+    let pid = proposal_id_from(&out);
+    Repo::assert_success(
+        &repo.tissue(&["approve", "IAM-2", &pid, "--actor", "human:e2e"]),
+        "approve reopen",
+    );
+    assert!(
+        repo.read_issue("IAM-2").contains("status: open"),
+        "reopened"
+    );
+}

@@ -1010,7 +1010,8 @@ fn api_write_agent_test(stream: &mut TcpStream, repo: &Path) -> Result<(), Strin
     }
 }
 
-/// POST /api/issues  {"id": "IAM-9", "title": "...", "actor": "agent:dev-1"}
+/// POST /api/issues  {"id": "IAM-9", "title": "...", "actor": "agent:dev-1",
+///                    (optional) "body", "project", "type", "parent"}
 /// Creates an issue (human format untouched by the agent afterwards).
 fn api_write_create_issue(
     stream: &mut TcpStream,
@@ -1038,7 +1039,21 @@ fn api_write_create_issue(
     let body = json_field(&v, "body");
     // #172: optional project — same shared validation as the CLI.
     let project = json_field(&v, "project");
-    match crate::api_write::create_issue(repo, id, title, body, actor_id, project) {
+    // #211: optional type (feature|task|bug, default task) + parent id.
+    let issue_type = json_field(&v, "type");
+    let parent = json_field(&v, "parent");
+    match crate::api_write::create_issue(
+        repo,
+        &crate::api_write::CreateIssue {
+            id,
+            title,
+            body,
+            actor_id,
+            project,
+            issue_type,
+            parent,
+        },
+    ) {
         Ok(()) => respond_json(
             stream,
             201,
@@ -1281,8 +1296,8 @@ fn api_write_sync(
 
 /// POST /api/issues/<id>/edit: human front-matter edit with the #78
 /// revision guard. {"expected_revision": N, optional "title"/"status"/
-/// "release", "actor": "human:..."}. Conflict => 409 with the re-read-
-/// and-re-apply message; never a silent overwrite (#99 AC2).
+/// "release"/"type"/"parent", "actor": "human:..."}. Conflict => 409 with
+/// the re-read-and-re-apply message; never a silent overwrite (#99 AC2).
 fn api_write_edit(
     stream: &mut TcpStream,
     repo: &Path,
@@ -1313,23 +1328,48 @@ fn api_write_edit(
     let title = json_field(&v, "title");
     let status = json_field(&v, "status");
     let release = json_field(&v, "release");
-    if title.is_none() && status.is_none() && release.is_none() {
+    // #211: optional type + parent flow through the same guarded edit.
+    let issue_type = json_field(&v, "type");
+    let parent = json_field(&v, "parent");
+    if title.is_none()
+        && status.is_none()
+        && release.is_none()
+        && issue_type.is_none()
+        && parent.is_none()
+    {
         return respond_json(
             stream,
             400,
-            "{\"error\":\"nothing to edit: provide at least one of title, status, release\"}",
+            "{\"error\":\"nothing to edit: provide at least one of title, status, release, type, parent\"}",
         );
     }
     if let Some(s) = status {
-        if !matches!(s, "open" | "in-progress" | "closed") {
+        // #211: the five workflow states; `closed` stays accepted as an
+        // alias for `done` (read-time migration).
+        if !matches!(
+            s,
+            "open" | "in-progress" | "review" | "done" | "rejected" | "closed"
+        ) {
             return respond_json(
                 stream,
                 400,
-                "{\"error\":\"status must be one of: open, in-progress, closed\"}",
+                "{\"error\":\"status must be one of: open, in-progress, review, done, rejected (closed accepted as done)\"}",
             );
         }
     }
-    match crate::api_write::edit_issue(repo, id, rev, title, status, release, actor_id) {
+    match crate::api_write::edit_issue(
+        repo,
+        &crate::api_write::EditIssue {
+            id,
+            expected_revision: rev,
+            title,
+            status,
+            release,
+            issue_type,
+            parent,
+            actor_id,
+        },
+    ) {
         Ok(()) => respond_json(stream, 200, "{\"edited\":true}"),
         Err(e) => {
             let conflict = e.starts_with("CONFLICT:");
@@ -1395,10 +1435,15 @@ fn creation_draft_summary(repo: &Path, dir: &Path) -> Option<IssueFile> {
 
 fn issue_summary_json(issue: &IssueFile) -> String {
     format!(
-        "{{\"id\":{},\"title\":{},\"status\":\"{}\",\"release\":{},\"tags\":{},\"created\":{},\"updated\":{}}}",
+        "{{\"id\":{},\"title\":{},\"type\":\"{}\",\"status\":\"{}\",\"parent\":{},\"release\":{},\"tags\":{},\"created\":{},\"updated\":{}}}",
         json_str(&issue.id),
         json_str(&issue.title),
+        issue.issue_type.as_str(),
         issue.status.as_str(),
+        match &issue.parent {
+            Some(p) => json_str(p),
+            None => "null".to_string(),
+        },
         match &issue.release {
             Some(r) => json_str(r),
             None => "null".to_string(),

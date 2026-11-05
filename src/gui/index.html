@@ -34,8 +34,20 @@
           <ul class="status-filter" id="status-filter">
             <li><a href="#/issues?status=open" class="filter-link" data-status="open">open</a></li>
             <li><a href="#/issues?status=in-progress" class="filter-link" data-status="in-progress">in-progress</a></li>
-            <li><a href="#/issues?status=closed" class="filter-link" data-status="closed">closed</a></li>
+            <li><a href="#/issues?status=review" class="filter-link" data-status="review">review</a></li>
+            <li><a href="#/issues?status=done" class="filter-link" data-status="done">done</a></li>
+            <li><a href="#/issues?status=rejected" class="filter-link" data-status="rejected">rejected</a></li>
             <li><a href="#/issues" class="filter-link" data-status="">all</a></li>
+          </ul>
+        </div>
+        <!-- #211: type filter (feature | task | bug). -->
+        <div class="filter-block">
+          <h3 class="sidebar-heading">Type</h3>
+          <ul class="type-filter" id="type-filter">
+            <li><a href="#/issues?type=feature" class="filter-link" data-type="feature">feature</a></li>
+            <li><a href="#/issues?type=task" class="filter-link" data-type="task">task</a></li>
+            <li><a href="#/issues?type=bug" class="filter-link" data-type="bug">bug</a></li>
+            <li><a href="#/issues" class="filter-link" data-type="">all</a></li>
           </ul>
         </div>
       </nav>

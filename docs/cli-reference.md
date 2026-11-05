@@ -55,6 +55,8 @@ The title is positional or a `--title` flag — exactly one of the two.
 tissue create DOC-1 "Write user guide"
 tissue create DOC-2 --title "Proofread guide" --body "Body text, no editor."
 tissue create OPS-7 "Fix deploy" --project ops     # sign to a project (#172)
+tissue create IAM-10 "Login flow" --type feature    # types per #211
+tissue create IAM-11 "Fix login redirect" --type bug --parent IAM-10
 ```
 
 `--project <NAME>` signs the issue to a project from `.tissue/config.yml`;
@@ -71,6 +73,9 @@ Commits: exactly one, `create <ID>: <TITLE>`.
 |---|---|
 | `--title <TEXT>` | The issue title (alternative to the positional form; exactly one required) |
 | `--body <TEXT>` | Issue body text; created as-is instead of opening the editor |
+| `--project <NAME>` | Project to sign the issue to (id prefix must match its configured prefix) |
+| `--type <TYPE>` | Issue type (#211): `feature`, `task` (default), or `bug` |
+| `--parent <ID>` | Parent feature id (#211): must exist and be a feature; only `task`/`bug` may have one |
 
 ---
 
@@ -85,6 +90,8 @@ agent create-proposal (directory with a stream but no `issue.md` yet,
 ```sh
 tissue list
 tissue list --status open
+tissue list --status done          # `closed` still works as an alias for `done`
+tissue list --type bug             # #211
 tissue list --project iam
 tissue list --all
 ```
@@ -93,7 +100,8 @@ Read-only.
 
 | Flag | Meaning |
 |---|---|
-| `--status <STATUS>` | Show only issues with these statuses (`open`, `in-progress`, `closed`) — the full `status` enum; an issue's `status` front-matter field accepts the same three values |
+| `--status <STATUS>` | Show only issues with these statuses — the full #211 enum: `open`, `in-progress`, `review`, `done`, `rejected` (`closed` is accepted as an alias for `done`) |
+| `--type <TYPE>` | Show only issues of this type (#211): `feature`, `task`, or `bug` |
 | `--project <NAME>` | Show only issues of one project — a name mapped to an issue-id prefix in `.tissue/config.yml` (see below); unknown names fail with a clear error |
 | `--all` | Explicitly list every issue in the repo, across all projects (listing all projects is already the default) |
 
@@ -165,7 +173,8 @@ the default `project:` entry. Prefixes are uppercase ASCII letters (the
 
 ## `tissue show <ID>`
 
-Print one issue: front-matter fields and body. Read-only.
+Print one issue: front-matter fields (`id`, `title`, `type`, `status`,
+`parent`, `release`, `tags`, …) and body. Read-only.
 
 ```sh
 tissue show IAM-42
@@ -177,7 +186,7 @@ tissue show IAM-42
 
 Record a human edit in the AI stream. Run this **after** editing
 `issue.md` — tissue computes the exact field-level changes since the last
-sync (title/status/release/tags/body) and records them in the
+sync (title/type/status/parent/release/tags/body) and records them in the
 `human-sync` record, together with a snapshot of the human format at sync
 time (the next sync's baseline). Agents reconcile from that data, never
 from raw diffs.
@@ -281,7 +290,7 @@ tissue propose IAM-42 --field status --current open \
 
 | Flag | Meaning |
 |---|---|
-| `--field <FIELD>` | Field to change: `title`, `status`, or `release`. `status` accepts exactly: `open`, `in-progress`, `closed` |
+| `--field <FIELD>` | Field to change: `title`, `status`, `release`, `type`, or `parent` (#211). `status` accepts: `open`, `in-progress`, `review`, `done`, `rejected` — workflow transitions are enforced when the proposal is approved |
 | `--current <VALUE>` | The value the field currently has (stale proposals are refused) |
 | `--proposed <VALUE>` | The value the field should have |
 | `--rationale <TEXT>` | Why the change is right, recorded for the human reviewer |

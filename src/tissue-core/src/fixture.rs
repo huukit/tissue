@@ -21,6 +21,7 @@ pub const SCENARIOS: &[&str] = &[
     "both-changed",
     "agent-created-pending",
     "synced-clean",
+    "typed-feature",
 ];
 
 /// The opt-in switch: `dev_fixtures: true` in `.tissue/config.yml`.
@@ -228,6 +229,51 @@ pub fn generate(repo: &Repo, id: &str, scenario: &str, seed: u64) -> Result<Stri
                 "{id}: both-changed — pending proposal + unsynced human edit; approving now conflicts (stale)"
             ))
         }
+        "typed-feature" => {
+            // #211: a feature issue plus this issue as its child task
+            // (linked via `parent`) — exercises the type/parent fields.
+            let num: u64 = id
+                .rsplit('-')
+                .next()
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0);
+            let prefix = id.rsplit('-').nth(1).unwrap_or("IAM");
+            let feat_id = format!("{prefix}-{}", num + 900);
+            let feat_dir = repo
+                .resolve(&[".tissue", "issues", &feat_id])
+                .map_err(|e| e.to_string())?;
+            let mut feat = IssueFile::new(
+                &feat_id,
+                "Fixture feature",
+                IssueStatus::Open,
+                "## Summary\n\nfixture feature body\n",
+                &ts(seed, 2),
+            )
+            .map_err(|e| e.to_string())?;
+            feat.set_issue_type(crate::human::IssueType::Feature, &ts(seed, 2));
+            std::fs::create_dir_all(&feat_dir)
+                .map_err(|e| format!("creating {}: {e}", feat_dir.display()))?;
+            feat.write(&feat_dir.join("issue.md"))
+                .map_err(|e| e.to_string())?;
+            repo.commit_all(
+                &human.author,
+                &format!("create {feat_id}: Fixture feature (fixture)"),
+            )
+            .map_err(|e| e.to_string())?;
+            let mut issue = IssueFile::from_path(&issue_path).map_err(|e| e.to_string())?;
+            issue
+                .set_parent(Some(feat_id.clone()), &ts(seed, 3))
+                .map_err(|e| e.to_string())?;
+            issue.write(&issue_path).map_err(|e| e.to_string())?;
+            repo.commit_all(
+                &human.author,
+                &format!("edit {id}: parent -> {feat_id} (fixture)"),
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(format!(
+                "{id}: typed-feature — task with parent {feat_id} (a feature); the feature view lists it as a child"
+            ))
+        }
         _ => unreachable!("scenario checked above"),
     }
 }
@@ -341,6 +387,12 @@ mod tests {
             .sync("IAM-5", &human, &ts(9, 2), "nothing new")
             .unwrap_err();
         assert!(err.to_string().contains("nothing to sync"), "{err}");
+        // #211 typed-feature: the issue is a task with a feature parent
+        let typed = IssueFile::from_path(&dir.join(".tissue/issues/IAM-6/issue.md")).unwrap();
+        assert_eq!(typed.issue_type, crate::human::IssueType::Task);
+        assert_eq!(typed.parent.as_deref(), Some("IAM-906"));
+        let feat = IssueFile::from_path(&dir.join(".tissue/issues/IAM-906/issue.md")).unwrap();
+        assert_eq!(feat.issue_type, crate::human::IssueType::Feature);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

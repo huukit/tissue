@@ -96,6 +96,10 @@ pub enum Field {
     Title,
     Status,
     Release,
+    /// #211: issue type (feature|task|bug).
+    Type,
+    /// #211: parent feature id.
+    Parent,
     /// #139: an agent's issue-creation proposal — the draft lives in the
     /// stream, the human format is only written on approval.
     Create,
@@ -107,6 +111,8 @@ impl Field {
             Field::Title => "title",
             Field::Status => "status",
             Field::Release => "release",
+            Field::Type => "type",
+            Field::Parent => "parent",
             Field::Create => "create",
         }
     }
@@ -116,6 +122,8 @@ impl Field {
             "title" => Some(Field::Title),
             "status" => Some(Field::Status),
             "release" => Some(Field::Release),
+            "type" => Some(Field::Type),
+            "parent" => Some(Field::Parent),
             "create" => Some(Field::Create),
             _ => None,
         }
@@ -344,9 +352,45 @@ impl Core {
             Field::Title => issue.title.clone(),
             Field::Status => issue.status.as_str().to_string(),
             Field::Release => issue.release.clone().unwrap_or_default(),
+            Field::Type => issue.issue_type.as_str().to_string(),
+            Field::Parent => issue.parent.clone().unwrap_or_default(),
             // Creation proposals never compare against an existing file.
             Field::Create => String::new(),
         }
+    }
+
+    /// #211: parent validation — the parent must exist, be a feature, and
+    /// only task/bug may carry a parent. Needs the repo, so it lives on
+    /// Core (called at create/edit/approve time).
+    pub fn validate_parent(
+        &self,
+        self_id: &str,
+        self_type: human::IssueType,
+        parent: &str,
+    ) -> Result<()> {
+        if !human::valid_issue_id(parent) {
+            return Err(Error::Proposal(format!(
+                "parent `{parent}` does not match pattern [A-Z]+-<number>"
+            )));
+        }
+        if parent == self_id {
+            return Err(Error::Proposal("an issue cannot be its own parent".into()));
+        }
+        if self_type == human::IssueType::Feature {
+            return Err(Error::Proposal(
+                "a feature cannot have a parent — only task/bug belong to a feature".into(),
+            ));
+        }
+        let parent_path = self.issue_path(parent)?;
+        let parent_issue = IssueFile::from_path(&parent_path)
+            .map_err(|_| Error::Proposal(format!("parent `{parent}` does not exist")))?;
+        if parent_issue.issue_type != human::IssueType::Feature {
+            return Err(Error::Proposal(format!(
+                "parent `{parent}` is a {}, not a feature",
+                parent_issue.issue_type.as_str()
+            )));
+        }
+        Ok(())
     }
 
     fn apply_field(
@@ -369,7 +413,9 @@ impl Core {
                 issue.set_title(value.to_string(), now);
             }
             Field::Status => {
-                issue.set_status(IssueStatus::parse(value).map_err(Error::Human)?, now);
+                let to = IssueStatus::parse(value).map_err(Error::Human)?;
+                // #211: workflow transitions enforced on programmatic changes.
+                issue.transition_to(to, now).map_err(Error::Human)?;
             }
             Field::Release => {
                 if !value.is_empty() && !human::valid_release_id(value) {
@@ -383,6 +429,23 @@ impl Core {
                     Some(value.to_string())
                 };
                 issue.set_release(release, now);
+            }
+            Field::Type => {
+                let t = human::IssueType::parse(value).map_err(Error::Human)?;
+                if t == human::IssueType::Feature && issue.parent.is_some() {
+                    return Err(Error::Proposal(
+                        "a feature cannot have a parent — clear parent first".into(),
+                    ));
+                }
+                issue.set_issue_type(t, now);
+            }
+            Field::Parent => {
+                if value.is_empty() {
+                    issue.set_parent(None, now)?;
+                } else {
+                    self.validate_parent(&issue.id, issue.issue_type, value)?;
+                    issue.set_parent(Some(value.to_string()), now)?;
+                }
             }
         }
         Ok(())
@@ -610,7 +673,7 @@ impl Core {
             .map(|s| s.to_string())
     }
 
-    /// Field-level human-format diff (title/status/release/tags/body).
+    /// Field-level human-format diff (title/type/status/parent/release/tags/body).
     /// Front-matter bookkeeping fields (created/updated/revision) are
     /// excluded: they move on every write and carry no reconciliation
     /// meaning.
@@ -627,9 +690,19 @@ impl Core {
         };
         push("title", before.title.clone(), after.title.clone());
         push(
+            "type",
+            before.issue_type.as_str().to_string(),
+            after.issue_type.as_str().to_string(),
+        );
+        push(
             "status",
             before.status.as_str().to_string(),
             after.status.as_str().to_string(),
+        );
+        push(
+            "parent",
+            before.parent.clone().unwrap_or_default(),
+            after.parent.clone().unwrap_or_default(),
         );
         push(
             "release",
@@ -1426,6 +1499,197 @@ mod tests {
         let (dir, core) = temp_core();
         let err = core.sync("../etc", &human_actor(), "now", "x").unwrap_err();
         assert!(matches!(err, Error::Proposal(_)));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// #211: agents can propose type/status/parent changes like any field;
+    /// approval applies them, and the workflow transitions are enforced at
+    /// apply time.
+    #[test]
+    fn propose_type_parent_and_enforced_transitions() {
+        let (dir, core) = temp_core();
+        seed_issue(&core, "IAM-1");
+        seed_issue(&core, "IAM-2");
+        // Make IAM-2 a feature (raw write — setup, not a workflow change).
+        {
+            let path = core.issue_path("IAM-2").unwrap();
+            let mut issue = IssueFile::from_path(&path).unwrap();
+            issue.set_issue_type(crate::human::IssueType::Feature, "2026-10-08T09:30:00Z");
+            issue.write(&path).unwrap();
+        }
+
+        // Illegal transition open -> done is refused at approve time.
+        let pid = core
+            .propose(
+                "IAM-1",
+                &agent(),
+                &ProposalDraft {
+                    now: "2026-10-08T10:00:00Z",
+                    field: Field::Status,
+                    current: "open",
+                    proposed: "done",
+                    rationale: "skip the workflow",
+                },
+            )
+            .unwrap();
+        let err = core
+            .decide(
+                "IAM-1",
+                &human_actor(),
+                "2026-10-08T11:00:00Z",
+                &pid,
+                Decision::Approve,
+                None,
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("illegal status transition"),
+            "{err}"
+        );
+
+        // Legal chain: open -> in-progress -> review -> done.
+        for (cur, next) in [
+            ("open", "in-progress"),
+            ("in-progress", "review"),
+            ("review", "done"),
+        ] {
+            let pid = core
+                .propose(
+                    "IAM-1",
+                    &agent(),
+                    &ProposalDraft {
+                        now: "2026-10-08T10:00:00Z",
+                        field: Field::Status,
+                        current: cur,
+                        proposed: next,
+                        rationale: "workflow",
+                    },
+                )
+                .unwrap();
+            core.decide(
+                "IAM-1",
+                &human_actor(),
+                "2026-10-08T11:00:00Z",
+                &pid,
+                Decision::Approve,
+                None,
+            )
+            .unwrap();
+        }
+        let issue = IssueFile::from_path(&core.issue_path("IAM-1").unwrap()).unwrap();
+        assert_eq!(issue.status, IssueStatus::Done);
+
+        // Type + parent proposals apply on approval; parent must be a
+        // feature and only task/bug may carry one.
+        let pid = core
+            .propose(
+                "IAM-1",
+                &agent(),
+                &ProposalDraft {
+                    now: "2026-10-08T12:00:00Z",
+                    field: Field::Type,
+                    current: "task",
+                    proposed: "bug",
+                    rationale: "it is a defect",
+                },
+            )
+            .unwrap();
+        core.decide(
+            "IAM-1",
+            &human_actor(),
+            "2026-10-08T12:30:00Z",
+            &pid,
+            Decision::Approve,
+            None,
+        )
+        .unwrap();
+        let pid = core
+            .propose(
+                "IAM-1",
+                &agent(),
+                &ProposalDraft {
+                    now: "2026-10-08T12:00:00Z",
+                    field: Field::Parent,
+                    current: "",
+                    proposed: "IAM-2",
+                    rationale: "belongs to the feature",
+                },
+            )
+            .unwrap();
+        core.decide(
+            "IAM-1",
+            &human_actor(),
+            "2026-10-08T12:30:00Z",
+            &pid,
+            Decision::Approve,
+            None,
+        )
+        .unwrap();
+        let issue = IssueFile::from_path(&core.issue_path("IAM-1").unwrap()).unwrap();
+        assert_eq!(issue.issue_type, crate::human::IssueType::Bug);
+        assert_eq!(issue.parent.as_deref(), Some("IAM-2"));
+
+        // Parent pointing at a non-feature is refused at approve time.
+        let pid = core
+            .propose(
+                "IAM-1",
+                &agent(),
+                &ProposalDraft {
+                    now: "2026-10-08T13:00:00Z",
+                    field: Field::Parent,
+                    current: "IAM-2",
+                    proposed: "IAM-1", // self / not a feature
+                    rationale: "bad",
+                },
+            )
+            .unwrap();
+        let err = core
+            .decide(
+                "IAM-1",
+                &human_actor(),
+                "2026-10-08T13:30:00Z",
+                &pid,
+                Decision::Approve,
+                None,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("parent"), "{err}");
+
+        // A feature cannot take a parent.
+        let pid = core
+            .propose(
+                "IAM-2",
+                &agent(),
+                &ProposalDraft {
+                    now: "2026-10-08T13:00:00Z",
+                    field: Field::Parent,
+                    current: "",
+                    proposed: "IAM-1",
+                    rationale: "bad",
+                },
+            )
+            .unwrap();
+        let err = core
+            .decide(
+                "IAM-2",
+                &human_actor(),
+                "2026-10-08T13:30:00Z",
+                &pid,
+                Decision::Approve,
+                None,
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("feature cannot have a parent"),
+            "{err}"
+        );
+
+        // validate_parent: missing parent id.
+        let err = core
+            .validate_parent("IAM-1", crate::human::IssueType::Task, "IAM-99")
+            .unwrap_err();
+        assert!(err.to_string().contains("does not exist"), "{err}");
+
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -15,7 +15,7 @@ use std::path::Path;
 
 use tissue_core::agent::{AgentStream, RecordData};
 use tissue_core::git;
-use tissue_core::human::{valid_issue_id, IssueFile, IssueStatus};
+use tissue_core::human::{valid_issue_id, IssueFile, IssueStatus, IssueType};
 use tissue_core::sync::{Actor, Core, Field, ProposalDraft};
 
 use crate::{issue_dir, now_utc};
@@ -31,18 +31,35 @@ fn actor_from(id: &str) -> Actor {
     }
 }
 
+/// POST /api/issues: create parameters (one struct — the arg list grew
+/// past clippy's limit with #211's type/parent).
+#[derive(Clone, Copy)]
+pub struct CreateIssue<'a> {
+    pub id: &'a str,
+    pub title: &'a str,
+    pub body: Option<&'a str>,
+    pub actor_id: &'a str,
+    pub project: Option<&'a str>,
+    /// #211: `feature` | `task` | `bug` (None = task).
+    pub issue_type: Option<&'a str>,
+    /// #211: parent feature id.
+    pub parent: Option<&'a str>,
+}
+
 /// POST /api/issues: create an issue. Human actors write the human format
 /// directly (they own it, decision 4); agent actors (#139) never do —
 /// their create becomes a creation proposal (needs-review) that a human
 /// approves, which is when issue.md is written.
-pub fn create_issue(
-    repo: &Path,
-    id: &str,
-    title: &str,
-    body: Option<&str>,
-    actor_id: &str,
-    project: Option<&str>,
-) -> Result<(), String> {
+pub fn create_issue(repo: &Path, p: &CreateIssue<'_>) -> Result<(), String> {
+    let CreateIssue {
+        id,
+        title,
+        body,
+        actor_id,
+        project,
+        issue_type,
+        parent,
+    } = *p;
     if !valid_issue_id(id) {
         return Err(format!(
             "invalid issue id `{id}`: must match [A-Z]+-<number>"
@@ -54,6 +71,16 @@ pub fn create_issue(
     // #172/#176: same shared validation as the CLI — the id prefix must
     // match the given (or default) project; never a hardcoded prefix.
     tissue_core::projects::validate_create_id(repo, project, id)?;
+    // #211: type (default task) + parent (must exist and be a feature).
+    let itype = match issue_type {
+        Some(t) => IssueType::parse(t).map_err(|e| format!("type: {e}"))?,
+        None => IssueType::Task,
+    };
+    if let Some(p) = parent {
+        core_for(repo)?
+            .validate_parent(id, itype, p)
+            .map_err(|e| format!("parent: {e}"))?;
+    }
     // #139: the four-case contract — an agent's create is a proposal.
     // The draft (title+body) lives in the stream; a human approves, and
     // only then does issue.md exist.
@@ -77,8 +104,14 @@ pub fn create_issue(
     }
     let body_text = body.unwrap_or("");
     let now = now_utc();
-    let issue = IssueFile::new(id, title, IssueStatus::Open, body_text, &now)
+    let mut issue = IssueFile::new(id, title, IssueStatus::Open, body_text, &now)
         .map_err(|e| format!("building issue: {e}"))?;
+    issue.set_issue_type(itype, &now);
+    if let Some(p) = parent {
+        issue
+            .set_parent(Some(p.to_string()), &now)
+            .map_err(|e| format!("parent: {e}"))?;
+    }
     std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     issue
         .write(&dir.join("issue.md"))
@@ -145,9 +178,11 @@ pub fn propose(
         "title" => Field::Title,
         "status" => Field::Status,
         "release" => Field::Release,
+        "type" => Field::Type,
+        "parent" => Field::Parent,
         other => {
             return Err(format!(
-                "invalid field `{other}`: expected title, status, or release"
+                "invalid field `{other}`: expected title, status, release, type, or parent"
             ))
         }
     };
@@ -185,19 +220,37 @@ pub fn sync(
     Ok(outcome)
 }
 
+/// POST /api/issues/<id>/edit: human front-matter edit parameters (#99's
+/// revision guard plus #211's type/parent).
+#[derive(Clone, Copy)]
+pub struct EditIssue<'a> {
+    pub id: &'a str,
+    pub expected_revision: u64,
+    pub title: Option<&'a str>,
+    pub status: Option<&'a str>,
+    pub release: Option<&'a str>,
+    /// #211: `feature` | `task` | `bug`.
+    pub issue_type: Option<&'a str>,
+    /// #211: parent feature id (empty string clears).
+    pub parent: Option<&'a str>,
+    pub actor_id: &'a str,
+}
+
 /// POST /api/issues/<id>/edit: apply a human front-matter edit with the
 /// #78 revision guard. `expected_revision` is the `revision` the GUI
 /// read when it opened the form; if the file changed since, the edit is
 /// refused as a conflict (re-read and re-apply — no silent overwrite).
-pub fn edit_issue(
-    repo: &Path,
-    id: &str,
-    expected_revision: u64,
-    title: Option<&str>,
-    status: Option<&str>,
-    release: Option<&str>,
-    actor_id: &str,
-) -> Result<(), String> {
+pub fn edit_issue(repo: &Path, p: &EditIssue<'_>) -> Result<(), String> {
+    let EditIssue {
+        id,
+        expected_revision,
+        title,
+        status,
+        release,
+        issue_type,
+        parent,
+        actor_id,
+    } = *p;
     let dir = issue_dir(repo, id);
     if !dir.is_dir() {
         return Err(format!("issue {id} not found"));
@@ -221,7 +274,35 @@ pub fn edit_issue(
     }
     if let Some(s) = status {
         let st = IssueStatus::parse(s).map_err(|e| format!("status: {e}"))?;
-        issue.set_status(st, &now);
+        // #211: workflow transitions enforced on programmatic status changes.
+        issue
+            .transition_to(st, &now)
+            .map_err(|e| format!("status: {e}"))?;
+    }
+    if let Some(t) = issue_type {
+        let it = IssueType::parse(t).map_err(|e| format!("type: {e}"))?;
+        // #211: a feature cannot carry a parent.
+        if it == IssueType::Feature && issue.parent.is_some() {
+            return Err("a feature cannot have a parent — clear parent first".into());
+        }
+        issue.set_issue_type(it, &now);
+    }
+    if let Some(p) = parent {
+        if p.is_empty() {
+            issue
+                .set_parent(None, &now)
+                .map_err(|e| format!("parent: {e}"))?;
+        } else {
+            // #211: parent must exist and be a feature; only task/bug may
+            // have one (checked against the post-edit type when both change).
+            let effective_type = issue.issue_type;
+            core_for(repo)?
+                .validate_parent(id, effective_type, p)
+                .map_err(|e| format!("parent: {e}"))?;
+            issue
+                .set_parent(Some(p.to_string()), &now)
+                .map_err(|e| format!("parent: {e}"))?;
+        }
     }
     if let Some(r) = release {
         if !r.is_empty() && !tissue_core::human::valid_release_id(r) {

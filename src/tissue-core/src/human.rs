@@ -50,11 +50,15 @@ type Result<T> = std::result::Result<T, Error>;
 // ---------------------------------------------------------------------------
 // Field values
 
+/// #211 (decision 15): the workflow states. `closed` is a read-time alias
+/// for `done` (migration on read; written back as `done` on next mutation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IssueStatus {
     Open,
     InProgress,
-    Closed,
+    Review,
+    Done,
+    Rejected,
 }
 
 impl IssueStatus {
@@ -62,7 +66,9 @@ impl IssueStatus {
         match self {
             IssueStatus::Open => "open",
             IssueStatus::InProgress => "in-progress",
-            IssueStatus::Closed => "closed",
+            IssueStatus::Review => "review",
+            IssueStatus::Done => "done",
+            IssueStatus::Rejected => "rejected",
         }
     }
 
@@ -70,8 +76,69 @@ impl IssueStatus {
         match s {
             "open" => Ok(IssueStatus::Open),
             "in-progress" => Ok(IssueStatus::InProgress),
-            "closed" => Ok(IssueStatus::Closed),
-            other => Err(Error::Validation(format!("invalid status `{other}`"))),
+            "review" => Ok(IssueStatus::Review),
+            "done" | "closed" => Ok(IssueStatus::Done),
+            "rejected" => Ok(IssueStatus::Rejected),
+            other => Err(Error::Validation(format!(
+                "invalid status `{other}` (expected open, in-progress, review, done, or rejected)"
+            ))),
+        }
+    }
+
+    /// #211 workflow transitions: open→in-progress→review→done,
+    /// review→in-progress (changes requested), any→rejected, rejected→open
+    /// (reopen). Identity (same→same) is a no-op and always allowed.
+    pub fn can_transition(from: IssueStatus, to: IssueStatus) -> bool {
+        if from == to {
+            return true;
+        }
+        match from {
+            IssueStatus::Open => matches!(to, IssueStatus::InProgress | IssueStatus::Rejected),
+            IssueStatus::InProgress => matches!(to, IssueStatus::Review | IssueStatus::Rejected),
+            IssueStatus::Review => matches!(
+                to,
+                IssueStatus::InProgress | IssueStatus::Done | IssueStatus::Rejected
+            ),
+            IssueStatus::Done => matches!(to, IssueStatus::Rejected),
+            IssueStatus::Rejected => matches!(to, IssueStatus::Open),
+        }
+    }
+
+    pub fn transition_error(from: IssueStatus, to: IssueStatus) -> String {
+        format!(
+            "illegal status transition {} -> {} (workflow: open→in-progress→review→done; review→in-progress; any→rejected; rejected→open)",
+            from.as_str(),
+            to.as_str()
+        )
+    }
+}
+
+/// #211 (decision 15): issue type. Missing `type` in front matter reads as
+/// `task` (backwards compatible with all pre-#211 issues).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueType {
+    Feature,
+    Task,
+    Bug,
+}
+
+impl IssueType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            IssueType::Feature => "feature",
+            IssueType::Task => "task",
+            IssueType::Bug => "bug",
+        }
+    }
+
+    pub fn parse(s: &str) -> Result<Self> {
+        match s {
+            "feature" => Ok(IssueType::Feature),
+            "task" => Ok(IssueType::Task),
+            "bug" => Ok(IssueType::Bug),
+            other => Err(Error::Validation(format!(
+                "invalid type `{other}` (expected feature, task, or bug)"
+            ))),
         }
     }
 }
@@ -323,7 +390,12 @@ fn atomic_write(path: &Path, content: &str) -> Result<()> {
 pub struct IssueFile {
     pub id: String,
     pub title: String,
+    /// #211: issue type; defaults to `task` when absent in front matter.
+    pub issue_type: IssueType,
     pub status: IssueStatus,
+    /// #211: parent feature id (task/bug belonging to a feature); absent =
+    /// no parent.
+    pub parent: Option<String>,
     /// Canonical issue->release link; absent/empty = unscheduled.
     pub release: Option<String>,
     pub tags: Vec<String>,
@@ -373,7 +445,9 @@ impl IssueFile {
         Ok(IssueFile {
             id: id.to_string(),
             title: title.to_string(),
+            issue_type: IssueType::Task,
             status,
+            parent: None,
             release: None,
             tags: Vec::new(),
             created: now.to_string(),
@@ -412,7 +486,23 @@ impl IssueFile {
         if title.contains('\n') {
             return Err(Error::Validation("title must be a single line".into()));
         }
+        // #211: absent `type` reads as `task` (backwards compatible).
+        let issue_type = match opt_string_field(&mapping, "type")? {
+            None => IssueType::Task,
+            Some(t) => IssueType::parse(&t)?,
+        };
         let status = IssueStatus::parse(&string_field(&mapping, "status")?)?;
+        let parent = match opt_string_field(&mapping, "parent")? {
+            None => None,
+            Some(p) => {
+                if !valid_issue_id(&p) {
+                    return Err(Error::Validation(format!(
+                        "parent `{p}` does not match pattern [A-Z]+-<number>"
+                    )));
+                }
+                Some(p)
+            }
+        };
         let release = opt_string_field(&mapping, "release")?;
         let tags = tags_field(&mapping)?;
         let created = string_field(&mapping, "created")?;
@@ -435,13 +525,16 @@ impl IssueFile {
         let extra = strip_known(
             &mapping,
             &[
-                "id", "title", "status", "release", "tags", "created", "updated", "revision",
+                "id", "title", "type", "status", "parent", "release", "tags", "created", "updated",
+                "revision",
             ],
         );
         Ok(IssueFile {
             id,
             title,
+            issue_type,
             status,
+            parent,
             release,
             tags,
             created,
@@ -467,7 +560,9 @@ impl IssueFile {
         let known = vec![
             ("id", self.id.clone()),
             ("title", yaml_scalar(&Value::String(self.title.clone()))),
+            ("type", self.issue_type.as_str().to_string()),
             ("status", self.status.as_str().to_string()),
+            ("parent", self.parent.clone().unwrap_or_default()),
             ("release", self.release.clone().unwrap_or_default()),
             (
                 "tags",
@@ -538,6 +633,45 @@ impl IssueFile {
         self.updated = now.to_string();
     }
 
+    /// #211: a programmatic status change — enforces the workflow
+    /// transitions (open→in-progress→review→done; review→in-progress;
+    /// any→rejected; rejected→open) on top of the raw `set_status`.
+    pub fn transition_to(&mut self, status: IssueStatus, now: &str) -> Result<()> {
+        if !IssueStatus::can_transition(self.status, status) {
+            return Err(Error::Validation(IssueStatus::transition_error(
+                self.status,
+                status,
+            )));
+        }
+        self.set_status(status, now);
+        Ok(())
+    }
+
+    pub fn set_issue_type(&mut self, issue_type: IssueType, now: &str) {
+        self.issue_type = issue_type;
+        self.front.invalidate();
+        self.updated = now.to_string();
+    }
+
+    pub fn set_parent(&mut self, parent: Option<String>, now: &str) -> Result<()> {
+        if let Some(p) = &parent {
+            if !valid_issue_id(p) {
+                return Err(Error::Validation(format!(
+                    "parent `{p}` does not match pattern [A-Z]+-<number>"
+                )));
+            }
+            if *p == self.id {
+                return Err(Error::Validation(
+                    "an issue cannot be its own parent".into(),
+                ));
+            }
+        }
+        self.parent = parent;
+        self.front.invalidate();
+        self.updated = now.to_string();
+        Ok(())
+    }
+
     pub fn set_release(&mut self, release: Option<String>, now: &str) {
         self.release = release;
         self.front.invalidate();
@@ -569,9 +703,9 @@ impl IssueFile {
 
     /// Spec invariant 3: closing an issue with no release link requires
     /// explicit human confirmation. The caller (core loop) must check this
-    /// before applying a close.
+    /// before applying a close. (#211: `closed` migrated to `done`.)
     pub fn closing_needs_confirmation(&self) -> bool {
-        self.status == IssueStatus::Closed && self.release.is_none()
+        self.status == IssueStatus::Done && self.release.is_none()
     }
 }
 
@@ -743,10 +877,10 @@ mod tests {
     #[test]
     fn mutation_renders_canonical_and_preserves_unknown_keys() {
         let mut file = IssueFile::parse(ISSUE).unwrap();
-        file.set_status(IssueStatus::Closed, "2026-10-09T10:00:00Z");
+        file.set_status(IssueStatus::Done, "2026-10-09T10:00:00Z");
         let out = file.serialize();
         let reparsed = IssueFile::parse(&out).unwrap();
-        assert_eq!(reparsed.status, IssueStatus::Closed);
+        assert_eq!(reparsed.status, IssueStatus::Done);
         assert_eq!(reparsed.updated, "2026-10-09T10:00:00Z");
         // idempotent: second round-trip is byte-identical
         assert_eq!(reparsed.serialize(), out);
@@ -865,13 +999,120 @@ mod tests {
     }
 
     #[test]
-    fn closed_without_release_needs_confirmation() {
+    fn done_without_release_needs_confirmation() {
         let mut file = IssueFile::parse(ISSUE).unwrap();
         file.release = None;
-        file.set_status(IssueStatus::Closed, "2026-10-09T10:00:00Z");
+        file.set_status(IssueStatus::Done, "2026-10-09T10:00:00Z");
         assert!(file.closing_needs_confirmation());
         file.set_release(Some("v1.2.0".into()), "2026-10-09T10:00:00Z");
         assert!(!file.closing_needs_confirmation());
+    }
+
+    /// #211: `closed` migrates to `done` on read; an unmutated file keeps
+    /// its raw bytes, a mutation writes the canonical `done` back.
+    #[test]
+    fn closed_migrates_to_done_on_read_and_writeback() {
+        let legacy = ISSUE.replace("status: open", "status: closed");
+        let file = IssueFile::parse(&legacy).unwrap();
+        assert_eq!(file.status, IssueStatus::Done);
+        assert_eq!(file.status.as_str(), "done");
+        // Unmutated: byte-identical round-trip (no data rewrite).
+        assert_eq!(file.serialize(), legacy);
+        // Mutated: canonical render carries `done`, never `closed`.
+        let mut mutated = IssueFile::parse(&legacy).unwrap();
+        mutated.set_title("New title".into(), "2026-10-10T00:00:00Z");
+        let out = mutated.serialize();
+        assert!(out.contains("status: done"), "write-back: {out}");
+        assert!(!out.contains("status: closed"), "no legacy value: {out}");
+        assert_eq!(IssueFile::parse(&out).unwrap().status, IssueStatus::Done);
+    }
+
+    /// #211: workflow transition matrix.
+    #[test]
+    fn status_transition_rules() {
+        use IssueStatus::*;
+        let legal = [
+            (Open, InProgress),
+            (Open, Rejected),
+            (InProgress, Review),
+            (InProgress, Rejected),
+            (Review, InProgress),
+            (Review, Done),
+            (Review, Rejected),
+            (Done, Rejected),
+            (Rejected, Open),
+        ];
+        let all = [Open, InProgress, Review, Done, Rejected];
+        for from in all {
+            for to in all {
+                assert_eq!(
+                    IssueStatus::can_transition(from, to),
+                    from == to || legal.contains(&(from, to)),
+                    "{from:?} -> {to:?}"
+                );
+            }
+        }
+        // transition_to enforces; set_status is the raw mutator.
+        let mut file = IssueFile::parse(ISSUE).unwrap();
+        assert!(
+            file.transition_to(Done, "x").is_err(),
+            "open -> done illegal"
+        );
+        assert!(file.transition_to(InProgress, "x").is_ok());
+        assert_eq!(file.status, InProgress);
+        let err = file.transition_to(Open, "x").unwrap_err();
+        assert!(
+            err.to_string().contains("illegal status transition"),
+            "{err}"
+        );
+    }
+
+    /// #211: type defaults to task, parent validates, both round-trip.
+    #[test]
+    fn type_and_parent_round_trip() {
+        // Absent type/parent: backwards compatible, raw preserved.
+        let file = IssueFile::parse(ISSUE).unwrap();
+        assert_eq!(file.issue_type, IssueType::Task);
+        assert_eq!(file.parent, None);
+        assert_eq!(file.serialize(), ISSUE);
+
+        // Present: parse + byte-identical round-trip.
+        let typed = ISSUE.replace("status: open", "type: feature\nstatus: open");
+        let file = IssueFile::parse(&typed).unwrap();
+        assert_eq!(file.issue_type, IssueType::Feature);
+        assert_eq!(file.serialize(), typed);
+
+        let with_parent = ISSUE.replace("status: open", "type: bug\nstatus: open\nparent: IAM-42");
+        let file = IssueFile::parse(&with_parent).unwrap();
+        assert_eq!(file.issue_type, IssueType::Bug);
+        assert_eq!(file.parent.as_deref(), Some("IAM-42"));
+        assert_eq!(file.serialize(), with_parent);
+
+        // Canonical render of a mutated file carries type/parent.
+        let mut file = IssueFile::parse(ISSUE).unwrap();
+        file.set_issue_type(IssueType::Bug, "x");
+        file.set_parent(Some("IAM-1".into()), "x").unwrap();
+        let out = file.serialize();
+        assert!(out.contains("type: bug"), "{out}");
+        assert!(out.contains("parent: IAM-1"), "{out}");
+        let reparsed = IssueFile::parse(&out).unwrap();
+        assert_eq!(reparsed.issue_type, IssueType::Bug);
+        assert_eq!(reparsed.parent.as_deref(), Some("IAM-1"));
+
+        // Invalid values are rejected at parse and at the mutation point.
+        assert!(
+            IssueFile::parse(&ISSUE.replace("status: open", "type: epic\nstatus: open")).is_err()
+        );
+        assert!(
+            IssueFile::parse(&ISSUE.replace("status: open", "parent: ../evil\nstatus: open"))
+                .is_err()
+        );
+        let mut file = IssueFile::parse(ISSUE).unwrap();
+        assert!(file.set_parent(Some("not-an-id".into()), "x").is_err());
+        assert!(
+            file.set_parent(Some("IAM-42".into()), "x").is_err(),
+            "self-parent"
+        );
     }
 
     #[test]
