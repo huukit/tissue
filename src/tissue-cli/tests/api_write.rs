@@ -952,6 +952,8 @@ fn create_issue_project_validation_shared() {
     assert!(
         status.contains("201"),
         "api create with project: {status} {body}"
+    );
+}
 
 // ---------------------------------------------------------------------------
 // #174: the token value is visible only where intended — the Settings page
