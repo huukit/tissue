@@ -1079,7 +1079,7 @@ fn search_cli_and_api_agree_212() {
         ("cookie", "cookie", "cookie", &["IAM-1"]), // body-only match
         ("urgent", "urgent", "urgent", &["IAM-1"]), // tag match
         ("bug", "bug", "bug", &["IAM-1", "IAM-2"]), // title match + type match
-        ("feature", "feature", "feature", &[]), // no feature in this scratch repo
+        ("feature", "feature", "feature", &[]),     // no feature in this scratch repo
         ("open", "open", "open", &["IAM-1", "IAM-2", "OPS-1"]), // status match
         ("CAFÉ", "CAFÉ", "caf%C3%A9", &["IAM-2"]),  // unicode case-insensitive
         ("systemd", "systemd", "systemd", &["OPS-1"]),

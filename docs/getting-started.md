@@ -168,7 +168,7 @@ as root — the repo dir is owned by that user (#132).
 
 `tissue serve`'s GUI is the full review surface: browse issues (with
 project filters, status/type dropdowns, and full search over id, title,
-body, tags, and status — #212, same matcher as `tissue list --search`),
+body, tags, type, and status — #212, same matcher as `tissue list --search`),
 work the awaiting-decision queue (approve/reject
 in the browser), read the agent-stream timeline, and edit front matter
 with conflict-safe semantics.

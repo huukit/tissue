@@ -94,7 +94,7 @@ tissue list --status done          # `closed` still works as an alias for `done`
 tissue list --type bug             # #211
 tissue list --project iam
 tissue list --all
-tissue list --search cookie        # #212: id/title/body/tags/status, case-insensitive
+tissue list --search cookie        # #212: id/title/body/tags/type/parent/status, case-insensitive
 ```
 
 Read-only.
@@ -105,7 +105,7 @@ Read-only.
 | `--type <TYPE>` | Show only issues of this type (#211): `feature`, `task`, or `bug` |
 | `--project <NAME>` | Show only issues of one project — a name mapped to an issue-id prefix in `.tissue/config.yml` (see below); unknown names fail with a clear error |
 | `--all` | Explicitly list every issue in the repo, across all projects (listing all projects is already the default) |
-| `--search <QUERY>` | #212: case-insensitive substring over id, title, body, tags, status, release — the same matcher as `GET /api/issues?q=` and the GUI search box, so all three return identical results; combinable with `--status`/`--project` |
+| `--search <QUERY>` | #212: case-insensitive substring over id, title, body, tags, type, parent, status, release — the same matcher as `GET /api/issues?q=` and the GUI search box, so all three return identical results; combinable with `--status`/`--type`/`--project` |
 
 ---
 
