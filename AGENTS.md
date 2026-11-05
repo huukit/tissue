@@ -21,6 +21,7 @@ A PR may contain work from multiple roles, provided each commit's message attrib
 - Review: the Tester verifies PRs (CI, smoke tests, review reports); the Product Owner approves merges. No agent merges its own PR.
 - Boundaries: the Tester does not push code fixes to a Developer branch — findings go to the issue/PR; the Developer applies them.
 - Fresh state before responding: an agent's memory is not a source of truth. Before any substantive response — status reports, coordination answers, review replies, planning — re-sync with the live repository: `git fetch`, then re-read the current PRs/issues and their latest comments. Answer from what was just read, and cite what was checked (branch SHAs, PR numbers, comment timestamps). If an earlier statement conflicts with fresh state, correct it explicitly rather than silently dropping it.
+- Role quick-starts: `operations/roles/product-owner.md`, `operations/roles/developer.md`, `operations/roles/tester.md`. Every agent reads its role file at session start; this file (AGENTS.md) remains canonical on any conflict.
 
 ## 1. Every change references an issue
 
@@ -65,3 +66,18 @@ Do not open PRs or push commits that reference nothing. Do not invent issue numb
 - PR descriptions and comments on PRs: concise and accurate. Lead with the answer or decision, no filler, no restating known context. Always end with a short summary a reviewer can act on — PRs must stay reviewable from their comments alone.
 - Comments on coordination-labeled issues: verbosity allowed. Agents exchanging information there benefit from completeness.
 - Commit messages: existing rules (§1, §3) suffice; no additional style requirements.
+
+## 7. Merge safety — never over a red base
+
+- Before any merge: the PR head's CI must be green AND main's latest push CI run must be green. A merge ref that fails only because the base is broken is not mergeable — fix main first and escalate on the coordination issue; never merge to get past a red base (#225 merged red on 2026-11-05, leaving main uncompilable and bricking every open PR's CI).
+- Never merge with any failed required check, even under time pressure. Branch protection enforcing this is tracked in #149.
+
+## 8. Agent runtime — poll mode
+
+- Every agent session runs in ~5-minute poll loops. Each cycle: `git fetch`, re-read open PRs/issues and the coordination issue's latest comments, check the latest CI runs — then act on what changed, citing what was checked (see the fresh-state rule in §0).
+- When idle, keep polling; do not stop or end the session at idle. The only allowed stop is reaching a release-tag milestone (the vX.Y.Z tag of the current milestone) — announce it on the coordination issue.
+
+## 9. Sandbox hygiene (#228)
+
+- In a constrained sandbox, run `python3 tools/procwatch.py` (lands with #230) before and after heavy local batteries (`cargo test --workspace` and friends). If it exits 1 (zombies present), stop spawning processes and report on the coordination issue — never keep testing into a full process table (`fork()` EAGAIN kills the session).
+- Test batteries must go through the guarded harness from #230 (own process group, always reaped, group-killed on timeout); do not bypass it.

@@ -41,6 +41,11 @@ Owner ruling 2026-11-05: v0.1.7 runs; the next release must carry the pending fi
 
 Long-lived branch, never main; UI-only, API frozen (ADR-002); reproduce the current GUI 1:1 in Dioxus; adopt only on owner review, outcome in ADR-003. Runs in parallel with v0.1.8 work; merges only after the trial decision.
 
+## Later — mobile (#239, #240)
+
+- **#239** GUI mobile-responsive layout — the serve UI must be browsable on phones (owner requirement 2026-11-05)
+- **#240** mobile app (native or companion over the `/api/*` contract, ADR-002) — after #239 and a stable API
+
 ## Later — PoC dogfood switch (#3)
 
 Run tissue's own issues in tissue. Gates: #140 smoke green + #159 ✔ + #149 ✔ (rules verified live) + #192 ✔. Prep done and merged: #162 (import dry-run), #163 (DOGFOOD-RUNBOOK.md + docs/agent-workflow.md).
