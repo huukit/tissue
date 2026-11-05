@@ -114,12 +114,40 @@ pub fn serve(
         }
     );
     println!("press Ctrl-C to stop");
+    // #194: thread-per-connection with a bounded cap — one slow or hanging
+    // client (e.g. a partial request, or a sync running a slow agent) must
+    // not block the whole API. The codebase is blocking I/O throughout, so a
+    // plain thread per connection is the right granularity. Finished threads
+    // are tracked with a JoinHandle queue so the cap is accurate.
+    use std::io::Write;
+    const MAX_CONNECTIONS: usize = 64;
+    let mut handles: std::collections::VecDeque<std::thread::JoinHandle<()>> =
+        std::collections::VecDeque::new();
     for stream in listener.incoming() {
+        // Reap finished handlers first so the cap reflects live work.
+        while let Some(h) = handles.front() {
+            if h.is_finished() {
+                let _ = handles.pop_front().unwrap().join();
+            } else {
+                break;
+            }
+        }
         match stream {
-            Ok(s) => {
-                if let Err(e) = handle(s, &repo, &gui_root, project_prefix) {
-                    eprintln!("warning: request failed: {e}");
+            Ok(mut s) => {
+                if handles.len() >= MAX_CONNECTIONS {
+                    let _ = s.write_all(
+                        b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    continue;
                 }
+                let repo = repo.clone();
+                let gui_root = gui_root.clone();
+                let prefix = project_prefix.map(|p| p.to_string());
+                handles.push_back(std::thread::spawn(move || {
+                    if let Err(e) = handle(s, &repo, &gui_root, prefix.as_deref()) {
+                        eprintln!("warning: request failed: {e}");
+                    }
+                }));
             }
             Err(e) => eprintln!("warning: connection failed: {e}"),
         }

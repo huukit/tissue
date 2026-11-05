@@ -82,6 +82,22 @@ fn git(root: &Path, args: &[&str]) -> Result<String> {
 #[derive(Clone)]
 pub struct Repo {
     root: PathBuf,
+    /// #194: serializes mutating git operations (add+commit) within this
+    /// process, keyed by repo root — concurrent serve handlers on the same
+    /// repo cannot interleave `git add -A` / `git commit`.
+    mutation_lock: std::sync::Arc<std::sync::Mutex<()>>,
+}
+
+/// Process-wide map of per-repo mutation locks (#194).
+static MUTATION_LOCKS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<()>>>>,
+> = std::sync::OnceLock::new();
+
+fn mutation_lock_for(root: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
+    let map =
+        MUTATION_LOCKS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut map = map.lock().unwrap();
+    map.entry(root.to_path_buf()).or_default().clone()
 }
 
 /// Outcome of `tissue pull` (#110).
@@ -100,7 +116,10 @@ impl Repo {
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
         git(&root, &["rev-parse", "--git-dir"])?;
-        Ok(Repo { root })
+        Ok(Repo {
+            mutation_lock: mutation_lock_for(&root),
+            root,
+        })
     }
 
     /// `tissue init`: create a fresh issue repo at `root`
@@ -116,7 +135,10 @@ impl Repo {
         let tissue = root.join(".tissue");
         std::fs::create_dir_all(tissue.join("issues"))?;
         std::fs::create_dir_all(tissue.join("releases"))?;
-        let repo = Repo { root: root.clone() };
+        let repo = Repo {
+            mutation_lock: mutation_lock_for(&root),
+            root: root.clone(),
+        };
         // Initial (empty) commit so every later mutation has a base; keeps history linear.
         git(
             &root,
@@ -165,7 +187,17 @@ impl Repo {
 
     /// Stage everything and create exactly one commit. Returns its short id.
     pub fn commit_all(&self, author: &Author, message: &str) -> Result<String> {
+        // #194: serialize add+commit per repo so concurrent writers cannot
+        // interleave (a torn add would commit another handler's half-write).
+        let _guard = self.mutation_lock.lock().unwrap();
         git(&self.root, &["add", "-A"])?;
+        // #194: under concurrency another handler's `add -A` may have swept
+        // up this change and committed it already — a clean tree after add
+        // means "already committed", not an error.
+        let status = git(&self.root, &["status", "--porcelain"])?;
+        if status.trim().is_empty() {
+            return self.head_short();
+        }
         git(
             &self.root,
             &[

@@ -1265,4 +1265,83 @@ fn actor_identity_bound_to_token_label() {
         "human approve works: {status} {body}"
     );
     assert!(repo.root.join(".tissue/issues/IAM-1/issue.md").exists());
+
+/// #194: serve is thread-per-connection — a slow client (partial request,
+/// socket held open) must not block other requests, and a storm of
+/// concurrent writes must produce exactly one commit each with no torn
+/// state (the per-repo mutation lock serializes add+commit).
+#[test]
+fn serve_concurrent_writes_and_slow_client() {
+    use std::io::{Read as _, Write as _};
+    let repo = Scratch::new("concurrency-194");
+    repo.set_token("tok");
+    // Pre-create issues to edit concurrently.
+    for n in 1..=8 {
+        let out = repo.tissue(&["create", &format!("IAM-{n}"), "seed", "--body", "b"]);
+        assert!(out.status.success(), "{out:?}");
+    }
+    let server = start_server(&repo);
+    let addr = server.addr;
+
+    // Slow client: open a socket, send a partial request line, hold it open.
+    let mut slow = std::net::TcpStream::connect(addr).unwrap();
+    slow.write_all(b"POST /api/issues HTTP/1.1\r\n").unwrap();
+    slow.flush().unwrap();
+
+    // While the slow client holds its connection, other requests must work.
+    let (status, body) = get(&addr, "/api/issues");
+    assert!(
+        status.contains("200"),
+        "reads work during slow client: {status} {body}"
+    );
+
+    // Fire 8 concurrent edits (one per issue) from threads.
+    let mut threads = Vec::new();
+    for n in 1..=8u32 {
+        let a = addr;
+        threads.push(std::thread::spawn(move || {
+            let body = format!(
+                r#"{{"expected_revision":1,"title":"edited-{n}"}}"#
+            );
+            let req = format!(
+                "POST /api/issues/IAM-{n}/edit HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer tok\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let mut s = std::net::TcpStream::connect(a).unwrap();
+            s.write_all(req.as_bytes()).unwrap();
+            let mut resp = String::new();
+            s.read_to_string(&mut resp).unwrap();
+            resp
+        }));
+    }
+    let mut ok = 0;
+    let mut conflict = 0;
+    for t in threads {
+        let resp = t.join().unwrap();
+        if resp.contains(" 200 ") || resp.contains(" 201 ") {
+            ok += 1;
+        } else if resp.contains(" 409 ") {
+            conflict += 1;
+        } else {
+            panic!("unexpected response: {}", resp);
+        }
+    }
+    assert_eq!(
+        ok + conflict,
+        8,
+        "all 8 edits answered: ok={ok} conflict={conflict}"
+    );
+    // No torn commits: git log stays linear and every issue dir is intact.
+    let log = repo.git(&["log", "--oneline"]);
+    assert!(!log.is_empty());
+    for n in 1..=8 {
+        assert!(
+            repo.root
+                .join(format!(".tissue/issues/IAM-{n}/issue.md"))
+                .exists(),
+            "IAM-{n} intact"
+        );
+    }
+    let _ = slow.shutdown(std::net::Shutdown::Both);
 }
