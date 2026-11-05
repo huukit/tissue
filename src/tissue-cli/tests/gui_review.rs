@@ -831,3 +831,40 @@ fn footer_links_release_and_license() {
         "hover underline: {css}"
     );
 }
+
+/// #200: the Settings view is restructured into three bordered sections —
+/// Agent connection, API tokens, About — in that order, with the token entry
+/// field inside the API tokens section, and /api/meta carries repo_path for
+/// the About section.
+#[test]
+fn settings_page_has_three_sections() {
+    let repo = Scratch::new("settings-sections-200");
+    let out = repo.tissue(&["create", "IAM-1", "x", "--body", "b"]);
+    assert!(out.status.success(), "{out:?}");
+    let server = start_server(&repo);
+    let (status, js) = get(&server.addr, "/app.js");
+    assert!(status.contains("200"), "{status}");
+    let i_agent = js.find("id=\"section-agent\"").expect("agent section");
+    let i_tokens = js.find("id=\"section-tokens\"").expect("tokens section");
+    let i_about = js.find("id=\"section-about\"").expect("about section");
+    assert!(
+        i_agent < i_tokens && i_tokens < i_about,
+        "section order agent < tokens < about"
+    );
+    for h in ["Agent connection", "API tokens", "About"] {
+        assert!(js.contains(h), "heading present: {h}");
+    }
+    // The token bar is rendered via settingsTokenBarHtml() inside the tokens
+    // section (the compiled app.js concatenates it there, after section-tokens).
+    let tail = &js[i_tokens..];
+    let call = tail.find("settingsTokenBarHtml()").expect("token bar call");
+    let about = tail.find("id=\"section-about\"").expect("about section");
+    assert!(call < about, "token bar rendered inside the tokens section");
+    assert!(js.contains("id=\"about-meta\""), "about meta container");
+    // #200: /api/meta carries repo_path for the About section.
+    let (status, body) = get(&server.addr, "/api/meta");
+    assert!(
+        status.contains("200") && body.contains("repo_path"),
+        "meta repo_path: {status} {body}"
+    );
+}

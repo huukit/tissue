@@ -852,19 +852,17 @@ async function renderReleaseDetail(id) {
  * field is write-only and only ever used to print a one-time hint for
  * `.tissue/secrets.yml` / env — the API stores just the `api_key_ref`. */
 async function renderSettings() {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _o, _p, _q;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _o, _p, _q, _r, _s, _t, _u, _v;
     const el = app();
     if (!el)
         return;
     el.innerHTML = `
     <h2 class="view-title">Settings</h2>
-    ${settingsTokenBarHtml()}
-    <div class="settings-box">
-      <p class="settings-note">Non-secret parts of <code>.tissue/config.yml</code>.
-        The API token is never shown here — set it via <code>TISSUE_API_TOKEN</code>
-        or the <code>api_token:</code> line in the repo (env var recommended).</p>
-      <button id="agent-test-btn" class="btn" type="button" title="Probe the configured agent (POST /api/agent/test)">Test connection</button>
-      <p id="agent-test-result" class="edit-result" aria-live="polite"></p>
+    <section class="settings-section" id="section-agent">
+      <h2>Agent connection</h2>
+      <p class="settings-note">Non-secret parts of <code>.tissue/config.yml</code>, saved
+        via the write API and committed. The API token is never shown or accepted here —
+        manage it in the API tokens section below.</p>
       <label>Agent mode
         <select id="cfg-agent-mode" aria-label="Agent mode">
           <option value="none">None (sync stays record-only)</option>
@@ -903,14 +901,19 @@ async function renderSettings() {
       <label>Remote
         <input id="cfg-remote" type="text" placeholder="e.g. /srv/tissue-remote (empty = none)">
       </label>
+      <button id="agent-test-btn" class="btn" type="button" title="Probe the configured agent (POST /api/agent/test)">Test connection</button>
+      <p id="agent-test-result" class="edit-result" aria-live="polite"></p>
       <button id="cfg-save" class="btn btn-primary">Save settings</button>
       <p id="cfg-result" class="edit-result" aria-live="polite"></p>
       <h3>Current config (whitelisted)</h3>
       <pre id="cfg-view" class="cfg-view">loading…</pre>
-      <h3>API tokens</h3>
+    </section>
+    <section class="settings-section" id="section-tokens">
+      <h2>API tokens</h2>
+      ${settingsTokenBarHtml()}
       <p class="settings-note">The token value is shown <strong>only once</strong>, right
         after issue — copy it then. The list shows id/label/created, never the secret.
-        Managing tokens needs the API token itself (the field at the top).</p>
+        Managing tokens needs the API token itself (the field above).</p>
       <div id="tokens-list" class="tokens-list">loading…</div>
       <label>New token label
         <input id="token-label" type="text" placeholder="e.g. human:tuomas or agent:dev-1" aria-label="New token label">
@@ -924,7 +927,11 @@ async function renderSettings() {
         </span>
       </div>
       <p id="token-result" class="edit-result" aria-live="polite"></p>
-    </div>`;
+    </section>
+    <section class="settings-section" id="section-about">
+      <h2>About</h2>
+      <div id="about-meta">loading…</div>
+    </section>`;
     bindTokenBar();
     let cfg = {};
     try {
@@ -946,6 +953,28 @@ async function renderSettings() {
         String((_g = agent === null || agent === void 0 ? void 0 : agent.timeout_sec) !== null && _g !== void 0 ? _g : 120);
     document.getElementById("cfg-remote").value = (_h = cfg.remote) !== null && _h !== void 0 ? _h : "";
     document.getElementById("cfg-view").textContent = JSON.stringify(cfg, null, 2);
+    // #200: About section — product metadata from /api/meta (#143) + repo path.
+    const about = document.getElementById("about-meta");
+    if (about) {
+        try {
+            const meta = await fetchJson("/api/meta");
+            const lic = meta.license_url
+                ? `<a href="${esc(meta.license_url)}" rel="noopener noreferrer" target="_blank">${esc(meta.license)}</a>`
+                : esc(meta.license);
+            about.innerHTML = `<dl class="front-matter">
+        <dt>Product</dt><dd>${esc(meta.product)} v${esc(meta.version)}</dd>
+        <dt>API</dt><dd>${esc(meta.api_version)}</dd>
+        <dt>License</dt><dd>${lic}</dd>
+        <dt>Build</dt><dd>${esc((_k = (_j = meta.build) === null || _j === void 0 ? void 0 : _j.target) !== null && _k !== void 0 ? _k : "?")} (${esc((_o = (_l = meta.build) === null || _l === void 0 ? void 0 : _l.profile) !== null && _o !== void 0 ? _o : "release")})</dd>
+        <dt>Issue repo</dt><dd><code>${esc((_p = meta.repo_path) !== null && _p !== void 0 ? _p : "")}</code></dd>
+        <dt>Docs</dt><dd><a href="https://github.com/huukit/tissue/tree/main/docs" rel="noopener noreferrer" target="_blank">docs/</a>
+          · <a href="https://github.com/huukit/tissue" rel="noopener noreferrer" target="_blank">github.com/huukit/tissue</a></dd>
+      </dl>`;
+        }
+        catch (_w) {
+            about.textContent = "metadata unavailable";
+        }
+    }
     const syncModeSections = () => {
         const m = document.getElementById("cfg-agent-mode").value;
         const cmd = document.getElementById("cfg-mode-command");
@@ -956,9 +985,9 @@ async function renderSettings() {
             http.hidden = m !== "http";
     };
     syncModeSections();
-    (_j = document.getElementById("cfg-agent-mode")) === null || _j === void 0 ? void 0 : _j.addEventListener("change", syncModeSections);
+    (_q = document.getElementById("cfg-agent-mode")) === null || _q === void 0 ? void 0 : _q.addEventListener("change", syncModeSections);
     // #189: "Test connection" probes the configured agent via POST /api/agent/test.
-    (_k = document.getElementById("agent-test-btn")) === null || _k === void 0 ? void 0 : _k.addEventListener("click", async () => {
+    (_r = document.getElementById("agent-test-btn")) === null || _r === void 0 ? void 0 : _r.addEventListener("click", async () => {
         var _a, _b, _c, _d, _e;
         const result = document.getElementById("agent-test-result");
         if (!result)
@@ -985,14 +1014,14 @@ async function renderSettings() {
         }
     });
     const keyInput = document.getElementById("cfg-agent-key");
-    (_l = document.getElementById("cfg-agent-key-toggle")) === null || _l === void 0 ? void 0 : _l.addEventListener("click", (ev) => {
+    (_s = document.getElementById("cfg-agent-key-toggle")) === null || _s === void 0 ? void 0 : _s.addEventListener("click", (ev) => {
         if (!keyInput)
             return;
         const show = keyInput.type === "password";
         keyInput.type = show ? "text" : "password";
         ev.target.textContent = show ? "Hide" : "Show";
     });
-    (_o = document.getElementById("cfg-save")) === null || _o === void 0 ? void 0 : _o.addEventListener("click", async () => {
+    (_t = document.getElementById("cfg-save")) === null || _t === void 0 ? void 0 : _t.addEventListener("click", async () => {
         var _a;
         const result = document.getElementById("cfg-result");
         if (!result)
@@ -1059,7 +1088,7 @@ async function renderSettings() {
         }
     });
     await renderTokensSection();
-    (_p = document.getElementById("token-issue")) === null || _p === void 0 ? void 0 : _p.addEventListener("click", async () => {
+    (_u = document.getElementById("token-issue")) === null || _u === void 0 ? void 0 : _u.addEventListener("click", async () => {
         const result = document.getElementById("token-result");
         const labelEl = document.getElementById("token-label");
         if (!result || !labelEl)
@@ -1094,7 +1123,7 @@ async function renderSettings() {
                 : msg;
         }
     });
-    (_q = document.getElementById("token-copy")) === null || _q === void 0 ? void 0 : _q.addEventListener("click", () => {
+    (_v = document.getElementById("token-copy")) === null || _v === void 0 ? void 0 : _v.addEventListener("click", () => {
         var _a;
         const secretEl = document.getElementById("token-secret");
         if (!secretEl)

@@ -479,6 +479,11 @@ fn serve_meta_endpoint_and_footer_version() {
     assert!(v["license_url"].as_str().unwrap().contains("LICENSE"));
     assert!(v["build"]["target"].as_str().unwrap().contains("linux"));
     assert_eq!(v["build"]["profile"], "release");
+    // #200: About section shows the issue repo path.
+    assert!(
+        !v["repo_path"].as_str().unwrap().is_empty(),
+        "repo_path present: {body}"
+    );
 
     // The served index.html footer has the compiled-in version baked in
     // (fallback when /api/meta is unreachable). Read the full body here —

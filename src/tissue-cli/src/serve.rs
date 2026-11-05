@@ -368,7 +368,7 @@ fn api_route(
     }
     // #143: product/version/license/API-version metadata (tokenless read).
     if rest == "meta" {
-        return api_meta(stream);
+        return api_meta(stream, repo);
     }
     if rest == "releases" {
         return api_releases(stream, repo);
@@ -381,15 +381,18 @@ fn api_route(
 
 /// GET /api/meta (#143): product metadata — tokenless read like every GET.
 /// Shape: {"product":"tissue","version":"…","api_version":"v1",
-/// "license":"GPL-3.0-only","license_url":"…","build":{"target":"…","profile":"release"}}.
-fn api_meta(stream: &mut TcpStream) -> Result<(), String> {
+/// "license":"GPL-3.0-only","license_url":"…","build":{"target":"…","profile":"release"},
+/// "repo_path":"…"}. `repo_path` is the issue repo this server exposes — the
+/// server is loopback-only, and #200 shows it in the GUI About section.
+fn api_meta(stream: &mut TcpStream, repo: &Path) -> Result<(), String> {
     let body = format!(
-        "{{\"product\":\"tissue\",\"version\":{},\"api_version\":{},\"license\":{},\"license_url\":{},\"build\":{{\"target\":{},\"profile\":\"release\"}}}}",
+        "{{\"product\":\"tissue\",\"version\":{},\"api_version\":{},\"license\":{},\"license_url\":{},\"build\":{{\"target\":{},\"profile\":\"release\"}},\"repo_path\":{}}}",
         json_str(tissue_core::VERSION),
         json_str(tissue_core::API_VERSION),
         json_str(tissue_core::LICENSE),
         json_str("https://github.com/huukit/tissue/blob/main/LICENSE"),
         json_str(tissue_core::BUILD_TARGET),
+        json_str(&repo.display().to_string()),
     );
     respond_json(stream, 200, &body)
 }

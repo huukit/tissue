@@ -111,6 +111,7 @@ interface MetaInfo {
   license: string;
   license_url?: string;
   build?: { target?: string; profile?: string };
+  repo_path?: string;
 }
 
 /** #135/#175/#178: one entry of GET /api/projects. */
@@ -986,13 +987,11 @@ async function renderSettings(): Promise<void> {
   if (!el) return;
   el.innerHTML = `
     <h2 class="view-title">Settings</h2>
-    ${settingsTokenBarHtml()}
-    <div class="settings-box">
-      <p class="settings-note">Non-secret parts of <code>.tissue/config.yml</code>.
-        The API token is never shown here — set it via <code>TISSUE_API_TOKEN</code>
-        or the <code>api_token:</code> line in the repo (env var recommended).</p>
-      <button id="agent-test-btn" class="btn" type="button" title="Probe the configured agent (POST /api/agent/test)">Test connection</button>
-      <p id="agent-test-result" class="edit-result" aria-live="polite"></p>
+    <section class="settings-section" id="section-agent">
+      <h2>Agent connection</h2>
+      <p class="settings-note">Non-secret parts of <code>.tissue/config.yml</code>, saved
+        via the write API and committed. The API token is never shown or accepted here —
+        manage it in the API tokens section below.</p>
       <label>Agent mode
         <select id="cfg-agent-mode" aria-label="Agent mode">
           <option value="none">None (sync stays record-only)</option>
@@ -1031,14 +1030,19 @@ async function renderSettings(): Promise<void> {
       <label>Remote
         <input id="cfg-remote" type="text" placeholder="e.g. /srv/tissue-remote (empty = none)">
       </label>
+      <button id="agent-test-btn" class="btn" type="button" title="Probe the configured agent (POST /api/agent/test)">Test connection</button>
+      <p id="agent-test-result" class="edit-result" aria-live="polite"></p>
       <button id="cfg-save" class="btn btn-primary">Save settings</button>
       <p id="cfg-result" class="edit-result" aria-live="polite"></p>
       <h3>Current config (whitelisted)</h3>
       <pre id="cfg-view" class="cfg-view">loading…</pre>
-      <h3>API tokens</h3>
+    </section>
+    <section class="settings-section" id="section-tokens">
+      <h2>API tokens</h2>
+      ${settingsTokenBarHtml()}
       <p class="settings-note">The token value is shown <strong>only once</strong>, right
         after issue — copy it then. The list shows id/label/created, never the secret.
-        Managing tokens needs the API token itself (the field at the top).</p>
+        Managing tokens needs the API token itself (the field above).</p>
       <div id="tokens-list" class="tokens-list">loading…</div>
       <label>New token label
         <input id="token-label" type="text" placeholder="e.g. human:tuomas or agent:dev-1" aria-label="New token label">
@@ -1052,7 +1056,11 @@ async function renderSettings(): Promise<void> {
         </span>
       </div>
       <p id="token-result" class="edit-result" aria-live="polite"></p>
-    </div>`;
+    </section>
+    <section class="settings-section" id="section-about">
+      <h2>About</h2>
+      <div id="about-meta">loading…</div>
+    </section>`;
   bindTokenBar();
   let cfg: ConfigView = {};
   try {
@@ -1074,6 +1082,27 @@ async function renderSettings(): Promise<void> {
     String(agent?.timeout_sec ?? 120);
   (document.getElementById("cfg-remote") as HTMLInputElement).value = cfg.remote ?? "";
   document.getElementById("cfg-view")!.textContent = JSON.stringify(cfg, null, 2);
+  // #200: About section — product metadata from /api/meta (#143) + repo path.
+  const about = document.getElementById("about-meta");
+  if (about) {
+    try {
+      const meta = await fetchJson<MetaInfo>("/api/meta");
+      const lic = meta.license_url
+        ? `<a href="${esc(meta.license_url)}" rel="noopener noreferrer" target="_blank">${esc(meta.license)}</a>`
+        : esc(meta.license);
+      about.innerHTML = `<dl class="front-matter">
+        <dt>Product</dt><dd>${esc(meta.product)} v${esc(meta.version)}</dd>
+        <dt>API</dt><dd>${esc(meta.api_version)}</dd>
+        <dt>License</dt><dd>${lic}</dd>
+        <dt>Build</dt><dd>${esc(meta.build?.target ?? "?")} (${esc(meta.build?.profile ?? "release")})</dd>
+        <dt>Issue repo</dt><dd><code>${esc(meta.repo_path ?? "")}</code></dd>
+        <dt>Docs</dt><dd><a href="https://github.com/huukit/tissue/tree/main/docs" rel="noopener noreferrer" target="_blank">docs/</a>
+          · <a href="https://github.com/huukit/tissue" rel="noopener noreferrer" target="_blank">github.com/huukit/tissue</a></dd>
+      </dl>`;
+    } catch {
+      about.textContent = "metadata unavailable";
+    }
+  }
 
   const syncModeSections = () => {
     const m = (document.getElementById("cfg-agent-mode") as HTMLSelectElement).value;
