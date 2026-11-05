@@ -69,7 +69,7 @@ Do not open PRs or push commits that reference nothing. Do not invent issue numb
 
 ## 7. Merge safety — never over a red base
 
-- Before any merge: the PR head's CI must be green AND main's latest push CI run must be green. A merge ref that fails only because the base is broken is not mergeable — fix main first and escalate on the coordination issue; never merge to get past a red base (#225 merged red on 2026-11-05, leaving main uncompilable and bricking every open PR's CI).
+- Before any merge: the PR's merge-ref CI run must be green — that is the exact tree that lands, so a red head is never mergeable (#225 merged red on 2026-11-05, leaving main uncompilable and bricking every open PR's CI). Main's latest push CI run should also be green; if it is red, a merge is allowed only when the PR's green merge-ref run covers that failure (merged tree compiles and passes — e.g. the PR that fixes a broken base) and the base failure is escalated on the coordination issue. Never merge to get past an unexplained red base.
 - Never merge with any failed required check, even under time pressure. Branch protection enforcing this is tracked in #149.
 
 ## 8. Agent runtime — poll mode
