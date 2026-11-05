@@ -490,9 +490,15 @@ fn serve_meta_endpoint_and_footer_version() {
     let mut full = String::new();
     std::io::Read::read_to_string(&mut stream, &mut full).expect("read");
     assert!(full.contains("200"), "{full}");
+    // #202: the footer version is a link to the release-tag page.
+    let ver = env!("CARGO_PKG_VERSION");
     assert!(
-        full.contains(&format!("tissue v{}", env!("CARGO_PKG_VERSION"))),
-        "footer carries compiled-in version"
+        full.contains(&format!("releases/tag/v{ver}")) && full.contains(&format!(">v{ver}</a>")),
+        "footer version links the release page"
+    );
+    assert!(
+        full.contains("blob/main/LICENSE"),
+        "footer license links the LICENSE file"
     );
     assert!(!full.contains("__TISSUE_VERSION__"), "placeholder replaced");
 }

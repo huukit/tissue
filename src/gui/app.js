@@ -1608,7 +1608,9 @@ async function loadMetaFooter() {
         const link = meta.license_url
             ? ` <a href="${esc(meta.license_url)}" rel="noopener noreferrer" target="_blank">${esc(meta.license)}</a>`
             : esc(meta.license);
-        el.innerHTML = `tissue v${esc(meta.version)} · API ${esc(meta.api_version)} · ${link}`;
+        // #202: the version tag links to that release's notes page.
+        const release = `https://github.com/huukit/tissue/releases/tag/v${meta.version}`;
+        el.innerHTML = `tissue <a href="${esc(release)}" rel="noopener noreferrer" target="_blank">v${esc(meta.version)}</a> · API ${esc(meta.api_version)} · ${link}`;
     }
     catch (_a) {
         // meta unavailable: keep the compiled-in fallback already in the HTML

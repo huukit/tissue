@@ -457,7 +457,8 @@ body {
   color: var(--muted);
   border-top: 1px solid var(--border);
 }
-.app-footer a { color: var(--accent); }
+.app-footer a { color: inherit; text-decoration: none; }
+.app-footer a:hover { text-decoration: underline; }
 
 /* #169: write-only API key field with show/hide toggle on Settings. */
 .key-field {

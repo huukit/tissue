@@ -726,3 +726,51 @@ fn projects_page_counts_nav_and_prefix_case() {
         "project badge keeps prefix case: {badge_rule}"
     );
 }
+
+/// #202: the footer version links to the GitHub release-tag page for that
+/// version (from /api/meta), the license links to LICENSE, links are plain
+/// with underline on hover, and the compiled-in fallback links the tag too.
+#[test]
+fn footer_links_release_and_license() {
+    let repo = Scratch::new("footer-202");
+    let server = start_server(&repo);
+    let addr = server.addr;
+    let ver = env!("CARGO_PKG_VERSION");
+
+    // Served index.html fallback: version link + license link baked in.
+    let (status, html) = get(&addr, "/");
+    assert!(status.contains("200"), "{status}");
+    assert!(
+        html.contains(&format!("releases/tag/v{ver}")),
+        "fallback footer links the release tag: {ver}"
+    );
+    assert!(html.contains("blob/main/LICENSE"), "fallback license link");
+    assert!(
+        html.contains("target=\"_blank\"") && html.contains("rel=\"noopener noreferrer\""),
+        "links open safely"
+    );
+
+    // Runtime footer (from /api/meta): app.js builds the release-tag link.
+    let (status, js) = get(&addr, "/app.js");
+    assert!(status.contains("200"), "{status}");
+    assert!(
+        js.contains("releases/tag/v"),
+        "app.js builds the release-tag link from meta.version"
+    );
+    assert!(
+        js.contains("rel=\\\"noopener noreferrer\\\"") || js.contains("noopener noreferrer"),
+        "app.js links carry rel=noopener"
+    );
+
+    // Plain look: footer links inherit color, underline only on hover.
+    let (status, css) = get(&addr, "/style.css");
+    assert!(status.contains("200"), "{status}");
+    assert!(
+        css.contains(".app-footer a { color: inherit; text-decoration: none; }"),
+        "plain footer links: {css}"
+    );
+    assert!(
+        css.contains(".app-footer a:hover { text-decoration: underline; }"),
+        "hover underline: {css}"
+    );
+}
