@@ -142,7 +142,7 @@ fn pull_push_two_machines() {
     // B pulls (up to date) and creates its own issue.
     assert_success(&tissue(&b_root, &["pull"]), "pull B");
     assert_success(
-        &tissue(&b_root, &["create", "VER-1", "From B", "--body", "b"]),
+        &tissue(&b_root, &["create", "IAM-3", "From B", "--body", "b"]),
         "create B",
     );
     assert_success(&tissue(&b_root, &["push"]), "push B");
@@ -157,12 +157,12 @@ fn pull_push_two_machines() {
 
     // Divergence: B also creates a commit. Now both sides have new work.
     assert_success(
-        &tissue(&b_root, &["create", "VER-2", "Also B", "--body", "b"]),
+        &tissue(&b_root, &["create", "IAM-4", "Also B", "--body", "b"]),
         "create B2",
     );
     assert_success(&tissue(&b_root, &["push"]), "push B2");
 
-    // A pulls: rebase replays A's IAM-2 commit on top of B's VER-2.
+    // A pulls: rebase replays A's IAM-2 commit on top of B's IAM-4.
     let out = a.tissue(&["pull"]);
     assert_success(&out, "pull A with divergence");
     assert!(

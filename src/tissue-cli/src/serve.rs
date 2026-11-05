@@ -661,7 +661,9 @@ fn api_write_create_issue(
     let actor_id = json_field(&v, "actor").unwrap_or("agent:api");
     // #134: optional body (the GUI prefills the CLI's Summary/AC template).
     let body = json_field(&v, "body");
-    match crate::api_write::create_issue(repo, id, title, body, actor_id) {
+    // #172: optional project — same shared validation as the CLI.
+    let project = json_field(&v, "project");
+    match crate::api_write::create_issue(repo, id, title, body, actor_id, project) {
         Ok(()) => respond_json(
             stream,
             201,

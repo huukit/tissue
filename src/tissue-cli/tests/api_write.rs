@@ -869,3 +869,88 @@ fn env_token_override_still_works() {
     let (status, _h, _b) = post(addr, "/api/projects", "{}", Some("wrong"));
     assert!(status.contains("401"), "{status}");
 }
+/// #172/#176: project assignment at creation — CLI --project, API project
+/// field, shared validation (mismatch refused, never a hardcoded IAM).
+#[test]
+fn create_issue_project_validation_shared() {
+    let repo = Scratch::new("create-project-172");
+    repo.set_token("tok");
+    // A second project exists.
+    let out = repo.tissue(&["project", "add", "ops", "OPS"]);
+    assert!(out.status.success(), "{out:?}");
+
+    // CLI: --project ops requires the OPS- prefix.
+    let out = repo.tissue(&[
+        "create",
+        "IAM-9",
+        "wrong prefix",
+        "--project",
+        "ops",
+        "--body",
+        "b",
+    ]);
+    assert!(!out.status.success(), "mismatch must fail: {out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("OPS-"), "clear mismatch error: {stderr}");
+    let out = repo.tissue(&[
+        "create",
+        "OPS-1",
+        "right prefix",
+        "--project",
+        "ops",
+        "--body",
+        "b",
+    ]);
+    assert!(out.status.success(), "match ok: {out:?}");
+    // CLI: default project (no --project) uses the configured default (IAM).
+    let out = repo.tissue(&["create", "IAM-1", "default project", "--body", "b"]);
+    assert!(out.status.success(), "default project: {out:?}");
+    let out = repo.tissue(&[
+        "create",
+        "OPS-2",
+        "no project flag, wrong prefix",
+        "--body",
+        "b",
+    ]);
+    assert!(!out.status.success(), "no silent prefix: {out:?}");
+
+    // API: explicit project field; mismatch -> 400 with the prefix named.
+    let server = start_server(&repo);
+    let addr = &server.addr;
+    let (status, _h, body) = post(
+        addr,
+        "/api/issues",
+        r#"{"id":"IAM-9","title":"api mismatch","actor":"human:gui","project":"ops"}"#,
+        Some("tok"),
+    );
+    assert!(
+        status.contains("400"),
+        "api mismatch refused: {status} {body}"
+    );
+    assert!(
+        body.contains("OPS-"),
+        "error names the right prefix: {body}"
+    );
+    // API: no project field -> default project prefix required.
+    let (status, _h, body) = post(
+        addr,
+        "/api/issues",
+        r#"{"id":"OPS-3","title":"api default","actor":"human:gui"}"#,
+        Some("tok"),
+    );
+    assert!(
+        status.contains("400"),
+        "no hardcoded fallback: {status} {body}"
+    );
+    // API: explicit correct project works.
+    let (status, _h, body) = post(
+        addr,
+        "/api/issues",
+        r#"{"id":"OPS-4","title":"api ok","actor":"human:gui","project":"ops"}"#,
+        Some("tok"),
+    );
+    assert!(
+        status.contains("201"),
+        "api create with project: {status} {body}"
+    );
+}

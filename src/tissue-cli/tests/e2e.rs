@@ -209,7 +209,17 @@ fn project_add_list_remove_e2e() {
     assert!(config.contains("second: VER"), "mapping written: {config}");
 
     // AC2: list --project and serve --project resolve immediately
-    create(&repo, "VER-1", "Second project issue");
+    // (#172: create under the second project via --project)
+    let out = repo.tissue(&[
+        "create",
+        "VER-1",
+        "Second project issue",
+        "--project",
+        "second",
+        "--body",
+        "b",
+    ]);
+    Repo::assert_success(&out, "tissue create --project second");
     let out = repo.tissue(&["list", "--project", "second"]);
     Repo::assert_success(&out, "list --project second");
     let list = Repo::stdout(&out);
@@ -482,7 +492,17 @@ fn multi_project_filters_and_full_loop() {
 
     // AC1: two prefixes coexist; the full loop works per-prefix.
     create(&repo, "IAM-1", "identity issue");
-    create(&repo, "VER-1", "verification issue");
+    // #172: VER-1 belongs to project `second` — pass --project.
+    let out = repo.tissue(&[
+        "create",
+        "VER-1",
+        "verification issue",
+        "--project",
+        "second",
+        "--body",
+        "b",
+    ]);
+    Repo::assert_success(&out, "tissue create --project second (VER-1)");
     for (id, title) in [("IAM-1", "identity issue"), ("VER-1", "verification issue")] {
         let out = repo.tissue(&["show", id]);
         Repo::assert_success(&out, "show per-prefix");

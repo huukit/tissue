@@ -339,10 +339,10 @@ fn approve_via_api_applies_edit_and_commits() {
 #[test]
 fn reject_via_api_records_reason_as_data() {
     let repo = Scratch::new("reject");
-    repo.tissue(&["create", "VER-1", "Stay", "--body", "b"]);
+    repo.tissue(&["create", "IAM-1", "Stay", "--body", "b"]);
     let out = repo.tissue(&[
         "propose",
-        "VER-1",
+        "IAM-1",
         "--field",
         "status",
         "--current",
@@ -361,7 +361,7 @@ fn reject_via_api_records_reason_as_data() {
     // Reject without a reason: refused — rejections are data.
     let (status, body) = post(
         &server.addr,
-        "/api/issues/VER-1/reject",
+        "/api/issues/IAM-1/reject",
         r#"{"proposal_id":"prop-01","actor":"human:gui"}"#,
         Some("gui-test-token"),
     );
@@ -371,23 +371,23 @@ fn reject_via_api_records_reason_as_data() {
     // Reject with a reason.
     let (status, body) = post(
         &server.addr,
-        "/api/issues/VER-1/reject",
+        "/api/issues/IAM-1/reject",
         r#"{"proposal_id":"prop-01","reason":"not done yet","actor":"human:gui"}"#,
         Some("gui-test-token"),
     );
     assert_eq!(status, "201", "reject: {body}");
 
     // The rejection is recorded in the stream, human format untouched.
-    let stream = std::fs::read_to_string(repo.root.join(".tissue/issues/VER-1/agent.jsonl"))
+    let stream = std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-1/agent.jsonl"))
         .expect("stream");
     assert!(stream.contains("rejection"), "rejection record: {stream}");
     assert!(stream.contains("not done yet"), "reason as data: {stream}");
-    let issue = repo.read_issue("VER-1");
+    let issue = repo.read_issue("IAM-1");
     assert!(issue.contains("open"), "human format untouched: {issue}");
     assert!(!issue.contains("needs-review"), "tag cleared: {issue}");
 
     // The timeline data path shows the rejection record type.
-    let (status, body) = get(&server.addr, "/api/issues/VER-1/records");
+    let (status, body) = get(&server.addr, "/api/issues/IAM-1/records");
     assert_eq!(status, "200");
     assert!(body.contains("rejection"), "timeline rejection: {body}");
 }

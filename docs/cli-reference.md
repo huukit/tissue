@@ -54,7 +54,14 @@ The title is positional or a `--title` flag — exactly one of the two.
 ```sh
 tissue create DOC-1 "Write user guide"
 tissue create DOC-2 --title "Proofread guide" --body "Body text, no editor."
+tissue create OPS-7 "Fix deploy" --project ops     # sign to a project (#172)
 ```
+
+`--project <NAME>` signs the issue to a project from `.tissue/config.yml`;
+the id prefix must match that project's prefix (mismatch is a clear error,
+never a silent re-prefixing — #176). Without `--project`, the configured
+**default** project applies. A project is immutable after create: the id
+prefix is the identity.
 
 Without `--body`, an editor (`$EDITOR`, default `vi`) opens with the
 issue template. Writes: `.tissue/issues/<ID>/issue.md`.

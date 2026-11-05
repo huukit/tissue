@@ -41,6 +41,7 @@ pub fn create_issue(
     title: &str,
     body: Option<&str>,
     actor_id: &str,
+    project: Option<&str>,
 ) -> Result<(), String> {
     if !valid_issue_id(id) {
         return Err(format!(
@@ -50,6 +51,9 @@ pub fn create_issue(
     if title.contains('\n') {
         return Err("title must be one line".into());
     }
+    // #172/#176: same shared validation as the CLI — the id prefix must
+    // match the given (or default) project; never a hardcoded prefix.
+    tissue_core::projects::validate_create_id(repo, project, id)?;
     // #139: the four-case contract — an agent's create is a proposal.
     // The draft (title+body) lives in the stream; a human approves, and
     // only then does issue.md exist.

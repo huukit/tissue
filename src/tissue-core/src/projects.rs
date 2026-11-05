@@ -293,6 +293,34 @@ pub fn valid_project_prefix(prefix: &str) -> bool {
 
 /// Resolve a project name to its prefix via config.yml (used by
 /// `list --project` / `serve --project`).
+/// #172/#176: shared create-time validation — resolve the project to its
+/// prefix and check the issue id matches it. `project: None` means the
+/// configured default project; there is never a hardcoded prefix fallback.
+pub fn validate_create_id(repo: &Path, project: Option<&str>, id: &str) -> Result<String, String> {
+    let grepo = crate::git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
+    let projects = Projects::new(grepo);
+    let list = projects.list()?;
+    let name = match project {
+        Some(n) => n.to_string(),
+        None => projects.default_name()?,
+    };
+    let Some((_, prefix)) = list.iter().find(|(n, _)| n == &name) else {
+        return Err(format!(
+            "unknown project `{name}` — configured projects: {}",
+            list.iter()
+                .map(|(n, p)| format!("{n} ({p})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    };
+    if !id.starts_with(&format!("{prefix}-")) {
+        return Err(format!(
+            "id `{id}` does not match project `{name}` — its prefix is {prefix}, so the id must start with `{prefix}-`"
+        ));
+    }
+    Ok(prefix.clone())
+}
+
 pub fn prefix_for(repo: &Path, name: &str) -> Result<String, String> {
     let config = std::fs::read_to_string(repo.join(".tissue").join("config.yml"))
         .map_err(|e| format!("reading config.yml: {e}"))?;

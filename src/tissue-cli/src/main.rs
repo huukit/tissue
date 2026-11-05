@@ -82,6 +82,11 @@ enum Commands {
         /// Issue body text; created as-is instead of opening the editor.
         #[arg(long, value_name = "TEXT")]
         body: Option<String>,
+        /// Project to sign the issue to (#172): the id prefix must match
+        /// the project's prefix in `.tissue/config.yml`. Default: the
+        /// configured default project — never a hardcoded prefix (#176).
+        #[arg(long, value_name = "NAME")]
+        project: Option<String>,
     },
     /// List issues; issues awaiting review are flagged `NEEDS REVIEW`.
     List {
@@ -390,6 +395,7 @@ fn run(cli: Cli) -> Result<(), String> {
             title,
             title_flag,
             body,
+            project,
         } => {
             // #145: accept both `tissue create <ID> <TITLE>` and
             // `tissue create <ID> --title <TITLE>`; exactly one required.
@@ -404,7 +410,7 @@ fn run(cli: Cli) -> Result<(), String> {
                     return Err("missing title: pass it positionally or with --title <TEXT>".into())
                 }
             };
-            create(&repo, &id, &title, body)
+            create(&repo, &id, &title, body, project.as_deref())
         }
         Commands::List {
             status,
@@ -786,9 +792,18 @@ fn civil_from_unix(secs: u64) -> (i64, u32, u32, u32, u32, u32) {
     )
 }
 
-fn create(repo: &Path, id: &str, title: &str, body: Option<String>) -> Result<(), String> {
+fn create(
+    repo: &Path,
+    id: &str,
+    title: &str,
+    body: Option<String>,
+    project: Option<&str>,
+) -> Result<(), String> {
     require_repo(repo)?;
     check_issue_id(id)?;
+    // #172/#176: the id prefix must match the chosen (or default) project —
+    // no silent fallback prefix.
+    tissue_core::projects::validate_create_id(repo, project, id)?;
     if issue_dir(repo, id).exists() {
         return Err(format!("issue `{id}` already exists"));
     }

@@ -125,6 +125,7 @@ function rowHtml(issue) {
     return `<li class="issue-row">
     <span class="issue-id">${esc(issue.id)}</span>
     <a class="issue-link issue-title" href="#/issue/${encodeURIComponent(issue.id)}">${title}</a>
+    <span class="badge project-badge" title="project (id prefix)">${esc(projectOf(issue.id))}</span>
     <span class="status ${statusClass(issue.status)}">${esc(issue.status)}</span>
     ${lastTouchBadge(issue)}
     ${badgeHtml(issue.tags)}
@@ -284,13 +285,36 @@ function bindSearch() {
 }
 /** The issue body template the CLI's `create` uses (#134). */
 const CREATE_BODY_TEMPLATE = "## Summary\n\nDescribe the issue.\n\n## Acceptance criteria\n\n- [ ] First criterion\n";
-/** #134: "+ New issue" form — POST /api/issues with the token, then
- * navigate to the created issue. */
+/** #172/#176: the configured projects for the new-issue selector. */
+let cachedProjects = [];
+/** #134/#172/#176: "+ New issue" form — an explicit project selector
+ * (populated from GET /api/projects, defaulting to the current filter or
+ * the configured default project); the id prefix is derived from the
+ * selected project. There is deliberately NO hardcoded "IAM" fallback:
+ * with no projects configured the form shows an error instead. */
 function newIssueFormHtml() {
-    const prefix = activeProject() || knownProjects(allIssues)[0] || "IAM";
+    var _a, _b;
+    const projects = cachedProjects;
+    const current = activeProject();
+    const def = (_a = projects.find((p) => p.default)) !== null && _a !== void 0 ? _a : projects[0];
+    const selected = (_b = projects.find((p) => p.prefix === current)) !== null && _b !== void 0 ? _b : def;
+    if (!selected) {
+        return `<div class="new-issue-form" id="new-issue-form" hidden>
+    <h3>New issue</h3>
+    <p class="error">No projects configured — create a project first ("+ New project").</p>
+    <button id="new-issue-cancel" class="btn btn-ghost">Cancel</button>
+  </div>`;
+    }
+    const prefix = selected.prefix;
     const next = nextIssueNumber(prefix);
+    const options = projects
+        .map((p) => `<option value="${esc(p.prefix)}"${p.prefix === prefix ? " selected" : ""}>${esc(p.name)} (${esc(p.prefix)})</option>`)
+        .join("");
     return `<div class="new-issue-form" id="new-issue-form" hidden>
     <h3>New issue</h3>
+    <label>Project
+      <select id="new-issue-project" aria-label="Project">${options}</select>
+    </label>
     <label>Id
       <input id="new-issue-id" type="text" value="${esc(prefix + "-" + next)}"
              aria-label="Issue id (PREFIX-number)">
@@ -323,18 +347,33 @@ function bindNewIssue() {
         return;
     const result = document.getElementById("new-issue-result");
     const idEl = document.getElementById("new-issue-id");
+    const projectEl = document.getElementById("new-issue-project");
     const titleEl = document.getElementById("new-issue-title");
     const bodyEl = document.getElementById("new-issue-body");
     (_a = document.getElementById("new-issue-cancel")) === null || _a === void 0 ? void 0 : _a.addEventListener("click", () => {
         form.hidden = true;
+    });
+    // #172/#176: changing the project re-derives the id prefix — no silent
+    // fallback to another project's prefix.
+    projectEl === null || projectEl === void 0 ? void 0 : projectEl.addEventListener("change", () => {
+        if (idEl && projectEl) {
+            idEl.value = `${projectEl.value}-${nextIssueNumber(projectEl.value)}`;
+        }
     });
     (_b = document.getElementById("new-issue-create")) === null || _b === void 0 ? void 0 : _b.addEventListener("click", async () => {
         if (!result || !idEl || !titleEl)
             return;
         const id = idEl.value.trim();
         const title = titleEl.value.trim();
+        const projectPrefix = projectEl ? projectEl.value : "";
         if (!/^[A-Z]+-\d+$/.test(id)) {
             result.textContent = "The id must look like PREFIX-number (e.g. IAM-6).";
+            return;
+        }
+        // #176: the id prefix must match the selected project — mismatch is an
+        // inline error, never a silent re-prefixing.
+        if (projectPrefix && !id.startsWith(`${projectPrefix}-`)) {
+            result.textContent = `Id ${id} does not match the selected project's prefix ${projectPrefix} — use ${projectPrefix}-<number>.`;
             return;
         }
         if (!title) {
@@ -343,11 +382,13 @@ function bindNewIssue() {
         }
         result.textContent = "…";
         try {
+            const selected = cachedProjects.find((p) => p.prefix === projectPrefix);
             await postJson("/api/issues", {
                 id,
                 title,
                 body: bodyEl ? bodyEl.value : undefined,
                 actor: "human:gui",
+                project: selected === null || selected === void 0 ? void 0 : selected.name,
             });
             // Created: navigate to the new issue's detail.
             window.location.hash = `#/issue/${encodeURIComponent(id)}`;
@@ -1033,6 +1074,7 @@ async function renderDetail(id) {
         const issue = data.issue;
         const fm = [
             ["id", esc(issue.id)],
+            ["project", `<span class="badge project-badge">${esc(projectOf(issue.id))}</span> <span class="hint">(immutable — the id prefix is the identity, #172)</span>`],
             ["status", `<span class="status ${statusClass(issue.status)}">${esc(issue.status)}</span>`],
             ["last touch", lastTouchBadge(issue)],
             ["release", esc((_a = issue.release) !== null && _a !== void 0 ? _a : "—")],
@@ -1102,6 +1144,14 @@ async function loadIssues() {
     try {
         const data = await fetchJson("/api/issues");
         allIssues = [...data.issues].sort((a, b) => issueNumber(a.id) - issueNumber(b.id));
+        // #175/#172: refresh the cached project list too — the new-issue form's
+        // project selector reads it.
+        try {
+            cachedProjects = await loadProjects();
+        }
+        catch (_a) {
+            cachedProjects = [];
+        }
         void populateProjectSelect(allIssues);
     }
     catch (e) {
