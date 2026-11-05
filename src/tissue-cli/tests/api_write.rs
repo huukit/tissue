@@ -1265,6 +1265,7 @@ fn actor_identity_bound_to_token_label() {
         "human approve works: {status} {body}"
     );
     assert!(repo.root.join(".tissue/issues/IAM-1/issue.md").exists());
+}
 
 /// #194: serve is thread-per-connection — a slow client (partial request,
 /// socket held open) must not block other requests, and a storm of
