@@ -774,3 +774,66 @@ fn footer_links_release_and_license() {
         "hover underline: {css}"
     );
 }
+
+/// #221: the sidebar project switcher is populated from GET /api/projects
+/// (config-authoritative) through a single projectPrefixes() helper — the
+/// rebase debris (`prefixes = []`) that wiped the config-derived prefixes is
+/// gone, so a project with zero issues is listed by /api/projects (Projects
+/// page data path) and the served dropdown code reads the same source, while
+/// switcher selection still filters the list via applyFilters/projectOf.
+#[test]
+fn project_dropdown_lists_zero_issue_projects_221() {
+    let repo = Scratch::new("dropdown-221");
+    // Default project IAM gets one issue; OPS is configured with zero issues.
+    assert!(repo
+        .tissue(&["create", "IAM-1", "only issue", "--body", "b"])
+        .status
+        .success());
+    assert!(repo
+        .tissue(&["project", "add", "ops", "OPS"])
+        .status
+        .success());
+    let server = start_server(&repo);
+    let addr = server.addr;
+
+    // Projects page data path: both projects listed, incl. zero-issue OPS.
+    let (status, body) = get(&addr, "/api/projects");
+    assert!(status.contains("200"), "{status} {body}");
+    assert!(
+        body.contains("\"prefix\":\"IAM\"") && body.contains("\"prefix\":\"OPS\""),
+        "zero-issue project listed: {body}"
+    );
+
+    // The served shell carries the switcher element.
+    let (status, html) = get(&addr, "/");
+    assert!(
+        status.contains("200") && html.contains("id=\"project-select\""),
+        "switcher in index.html: {status}"
+    );
+
+    // The served app.js: one projectPrefixes() helper reading GET
+    // /api/projects, no `prefixes = []` wipe left behind, and the switcher
+    // rebuilds its options from that helper; selection still filters.
+    let (status, js) = get(&addr, "/app.js");
+    assert!(status.contains("200"), "app.js: {status}");
+    assert!(
+        js.contains("projectPrefixes"),
+        "single helper shipped: {js}"
+    );
+    assert!(
+        !js.contains("prefixes = []"),
+        "rebase debris removed from served app.js"
+    );
+    assert!(
+        js.contains("/api/projects"),
+        "config-authoritative read shipped: {js}"
+    );
+    assert!(
+        js.contains("await projectPrefixes(issues)"),
+        "switcher uses the helper: {js}"
+    );
+    assert!(
+        js.contains("out.filter((i) => projectOf(i.id) === project)"),
+        "dropdown selection still filters: {js}"
+    );
+}
