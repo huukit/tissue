@@ -334,6 +334,12 @@ tissue serve --project iam   # filtered viewer
 |---|---|
 | `--port <N>` | Port to listen on (default `7323`) |
 
+Request limits (all enforced before authentication, #193): request bodies are
+capped at 1 MiB — override with the `TISSUE_MAX_BODY_BYTES` env var; a larger
+`Content-Length` is rejected with `413` before any allocation, a missing or
+invalid `Content-Length` on POST/PUT with `400`, `Transfer-Encoding: chunked`
+with `411`, and oversized request lines/header blocks with `400`/`431`.
+
 ---
 
 ## `tissue token <SUBCOMMAND>` (#159)

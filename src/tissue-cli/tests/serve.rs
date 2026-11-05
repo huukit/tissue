@@ -88,6 +88,15 @@ impl Scratch {
             .expect("git status");
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
+
+    fn set_token(&self, token: &str) {
+        let config = self.root.join(".tissue/config.yml");
+        let content = std::fs::read_to_string(&config).expect("config.yml exists after init");
+        std::fs::write(&config, format!("{content}api_token: \"{token}\"\n"))
+            .expect("write config");
+        self.git(&["add", "-A"]);
+        self.git(&["commit", "-m", "test: set api token"]);
+    }
 }
 
 struct Server {
@@ -104,6 +113,11 @@ impl Drop for Server {
 
 /// Start `tissue serve` on an ephemeral loopback port.
 fn start_server(repo: &Scratch) -> Server {
+    start_server_with_env(repo, &[])
+}
+
+/// Start `tissue serve` with extra environment pairs (e.g. TISSUE_MAX_BODY_BYTES).
+fn start_server_with_env(repo: &Scratch, env: &[(&str, &str)]) -> Server {
     // Reserve an ephemeral port, release it, and hope the race is kind;
     // retries make this deterministic enough for CI.
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("reserve port");
@@ -111,12 +125,14 @@ fn start_server(repo: &Scratch) -> Server {
     drop(listener);
 
     let exe: PathBuf = env!("CARGO_BIN_EXE_tissue").into();
-    let mut child = Command::new(exe)
-        .args(["serve", "--port", &port.to_string()])
+    let mut cmd = Command::new(exe);
+    cmd.args(["serve", "--port", &port.to_string()])
         .current_dir(&repo.root)
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("spawn tissue serve");
+        .stdout(Stdio::piped());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().expect("spawn tissue serve");
 
     // Poll until the server accepts connections.
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
@@ -479,4 +495,164 @@ fn serve_meta_endpoint_and_footer_version() {
         "footer carries compiled-in version"
     );
     assert!(!full.contains("__TISSUE_VERSION__"), "placeholder replaced");
+}
+
+/// #193 AC1: an oversized Content-Length is rejected with 413 *before* any
+/// allocation and before auth — and the server keeps serving afterwards.
+#[test]
+fn serve_rejects_oversized_body_pre_auth() {
+    let scratch = Scratch::new("body-cap");
+    let server = start_server(&scratch);
+    let addr = server.addr;
+
+    // No Authorization header: the 413 must fire pre-auth, pre-allocation.
+    let req = "POST /api/issues HTTP/1.1\r\nHost: localhost\r\nContent-Length: 500000000\r\nConnection: close\r\n\r\n";
+    let (status, _headers, body) = http(&addr, req);
+    assert!(
+        status.contains("413"),
+        "oversized CL must 413: {status} {body}"
+    );
+    assert!(body.contains("limit"), "413 body: {body}");
+
+    // Server still alive and serving reads.
+    let (status, _) = get(&addr, "/api/meta");
+    assert!(status.contains("200"), "server must survive: {status}");
+}
+
+/// #193: chunked Transfer-Encoding is refused with 411, not silently
+/// mishandled.
+#[test]
+fn serve_rejects_chunked_transfer_encoding() {
+    let scratch = Scratch::new("chunked");
+    let server = start_server(&scratch);
+    let addr = server.addr;
+    let req = "POST /api/issues HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+    let (status, _headers, body) = http(&addr, req);
+    assert!(status.contains("411"), "chunked must 411: {status} {body}");
+}
+
+/// #193: POST/PUT must carry a valid, non-conflicting Content-Length (400).
+#[test]
+fn serve_rejects_missing_or_invalid_content_length() {
+    let scratch = Scratch::new("cl");
+    let server = start_server(&scratch);
+    let addr = server.addr;
+
+    let req = "POST /api/issues HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    let (status, _headers, _body) = http(&addr, req);
+    assert!(
+        status.contains("400"),
+        "missing CL on POST must 400: {status}"
+    );
+
+    let req =
+        "POST /api/issues HTTP/1.1\r\nHost: localhost\r\nContent-Length: abc\r\nConnection: close\r\n\r\n";
+    let (status, _headers, _body) = http(&addr, req);
+    assert!(status.contains("400"), "invalid CL must 400: {status}");
+
+    let req = "POST /api/issues HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\nContent-Length: 6\r\nConnection: close\r\n\r\nabcde";
+    let (status, _headers, _body) = http(&addr, req);
+    assert!(status.contains("400"), "conflicting CL must 400: {status}");
+
+    let req = "PUT /api/config HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    let (status, _headers, _body) = http(&addr, req);
+    assert!(
+        status.contains("400"),
+        "missing CL on PUT must 400: {status}"
+    );
+
+    // GET without Content-Length is fine (no body expected).
+    let (status, _) = get(&addr, "/api/issues");
+    assert!(
+        status.contains("200"),
+        "GET without CL must stay 200: {status}"
+    );
+}
+
+/// #193: header count, per-line length, and request-line length are bounded
+/// pre-auth (431 / 400).
+#[test]
+fn serve_bounds_request_head() {
+    let scratch = Scratch::new("headers");
+    let server = start_server(&scratch);
+    let addr = server.addr;
+
+    // 101 headers > the 100-header cap.
+    let mut req = String::from("POST /api/issues HTTP/1.1\r\nHost: localhost\r\n");
+    for i in 0..101 {
+        req.push_str(&format!("X-Pad-{i}: v\r\n"));
+    }
+    req.push_str("Connection: close\r\n\r\n");
+    let (status, _headers, _body) = http(&addr, &req);
+    assert!(status.contains("431"), "header flood must 431: {status}");
+
+    // One header line beyond the 8 KiB per-line cap.
+    let req = format!(
+        "POST /api/issues HTTP/1.1\r\nHost: localhost\r\nX-Big: {}\r\nConnection: close\r\n\r\n",
+        "a".repeat(9000)
+    );
+    let (status, _headers, _body) = http(&addr, &req);
+    assert!(
+        status.contains("431"),
+        "oversized header line must 431: {status}"
+    );
+
+    // Request line beyond the 8 KiB cap.
+    let req = format!(
+        "GET /{} HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        "a".repeat(9000)
+    );
+    let (status, _headers, _body) = http(&addr, &req);
+    assert!(
+        status.contains("400"),
+        "oversized request line must 400: {status}"
+    );
+}
+
+/// #193: the body cap is configurable via TISSUE_MAX_BODY_BYTES.
+#[test]
+fn serve_body_cap_env_override() {
+    let scratch = Scratch::new("body-cap-env");
+    let server = start_server_with_env(&scratch, &[("TISSUE_MAX_BODY_BYTES", "64")]);
+    let addr = server.addr;
+
+    // Over the 64-byte cap -> 413 pre-auth.
+    let req = "POST /api/issues HTTP/1.1\r\nHost: localhost\r\nContent-Length: 100\r\nConnection: close\r\n\r\n";
+    let (status, _headers, _body) = http(&addr, req);
+    assert!(status.contains("413"), "over env cap must 413: {status}");
+
+    // Under the cap the size gate passes and the request reaches auth
+    // (401/503: no token configured in this scratch repo).
+    let req = "POST /api/issues HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\nConnection: close\r\n\r\n0123456789";
+    let (status, _headers, body) = http(&addr, req);
+    assert!(
+        status.contains("401") || status.contains("503"),
+        "under-cap body must reach auth, not 413: {status} {body}"
+    );
+}
+
+/// #193 AC1 (no regression): a normal token-authed write with a small body
+/// still succeeds.
+#[test]
+fn serve_normal_write_within_cap_still_works() {
+    let scratch = Scratch::new("normal-write");
+    scratch.set_token("test-token-193");
+    let server = start_server(&scratch);
+    let addr = server.addr;
+
+    let body = r#"{"id":"IAM-9","title":"Via API","body":"hi","actor":"human:tester"}"#;
+    let req = format!(
+        "POST /api/issues HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-token-193\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let (status, _headers, resp) = http(&addr, &req);
+    assert!(
+        status.contains("201"),
+        "normal write must 201: {status} {resp}"
+    );
+    let (status, list) = get(&addr, "/api/issues");
+    assert!(
+        status.contains("200") && list.contains("IAM-9"),
+        "created issue listed: {status} {list}"
+    );
 }

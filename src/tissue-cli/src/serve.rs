@@ -30,6 +30,55 @@ use crate::{issues_dir, tissue_dir};
 /// Default port for the loopback viewer.
 pub const DEFAULT_PORT: u16 = 7323;
 
+/// #193 (review Finding 2): pre-auth request-size limits. All API payloads
+/// are small JSON; anything bigger is hostile, not legitimate.
+const DEFAULT_MAX_BODY_BYTES: u64 = 1024 * 1024; // 1 MiB
+const MAX_REQUEST_LINE_BYTES: usize = 8 * 1024;
+const MAX_HEADER_LINE_BYTES: usize = 8 * 1024;
+const MAX_HEADER_BYTES_TOTAL: usize = 16 * 1024;
+const MAX_HEADERS: usize = 100;
+
+/// Request-body cap; overridable via env for edge cases (#193). The default
+/// is 1 MiB — far above any legitimate API payload.
+fn max_body_bytes() -> u64 {
+    std::env::var("TISSUE_MAX_BODY_BYTES")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_MAX_BODY_BYTES)
+}
+
+/// Read one line (through `\n`), capped at `cap` bytes — a client must not
+/// drive an unbounded allocation with an unterminated request line or
+/// header (#193). `Ok(None)` = EOF before any byte was read.
+fn read_line_capped<R: BufRead>(reader: &mut R, cap: usize) -> Result<Option<String>, String> {
+    let mut line = Vec::with_capacity(128);
+    loop {
+        let buf = reader
+            .fill_buf()
+            .map_err(|e| format!("reading line: {e}"))?;
+        if buf.is_empty() {
+            return Ok(if line.is_empty() {
+                None
+            } else {
+                Some(String::from_utf8_lossy(&line).into_owned())
+            });
+        }
+        let (take, saw_nl) = match buf.iter().position(|&b| b == b'\n') {
+            Some(p) => (p + 1, true),
+            None => (buf.len(), false),
+        };
+        if line.len() + take > cap {
+            return Err(format!("line exceeds {cap}-byte limit"));
+        }
+        line.extend_from_slice(&buf[..take]);
+        reader.consume(take);
+        if saw_nl {
+            return Ok(Some(String::from_utf8_lossy(&line).into_owned()));
+        }
+    }
+}
+
 fn releases_dir(repo: &Path) -> PathBuf {
     tissue_dir(repo).join("releases")
 }
@@ -85,42 +134,110 @@ fn handle(
     project_prefix: Option<&str>,
 ) -> Result<(), String> {
     let mut reader = BufReader::new(&mut stream);
-    let mut line = String::new();
-    reader
-        .read_line(&mut line)
-        .map_err(|e| format!("reading request line: {e}"))?;
+    let line = match read_line_capped(&mut reader, MAX_REQUEST_LINE_BYTES) {
+        Ok(Some(l)) => l,
+        Ok(None) => return Ok(()),
+        Err(_) => {
+            return respond_json(&mut stream, 400, "{\"error\":\"request line too long\"}");
+        }
+    };
     let mut parts = line.split_whitespace();
     let method = parts.next().unwrap_or("").to_string();
     let target = parts.next().unwrap_or("/").to_string();
     // Drain headers (until empty line) so the connection is reusable,
     // tracking Content-Length so the request body can be drained too —
     // closing with an undrained body sends a TCP RST that can destroy the
-    // queued response on the client side.
-    let mut content_length: u64 = 0;
+    // queued response on the client side. #193: header count and total
+    // header size are bounded pre-auth.
+    let mut content_length: Option<u64> = None;
+    let mut chunked = false;
     let mut headers = String::new();
+    let mut header_count = 0usize;
     loop {
-        let mut h = String::new();
-        let n = reader
-            .read_line(&mut h)
-            .map_err(|e| format!("header: {e}"))?;
-        if n == 0 || h.trim().is_empty() {
+        let h = match read_line_capped(&mut reader, MAX_HEADER_LINE_BYTES) {
+            Ok(Some(h)) => h,
+            Ok(None) => break,
+            Err(_) => {
+                return respond_json(
+                    &mut stream,
+                    431,
+                    "{\"error\":\"request header line too long\"}",
+                );
+            }
+        };
+        if h.trim().is_empty() {
             break;
         }
-        if let Some(v) = h
-            .to_ascii_lowercase()
-            .strip_prefix("content-length:")
-            .and_then(|v| v.trim().parse().ok())
-        {
-            content_length = v;
+        header_count += 1;
+        if header_count > MAX_HEADERS || headers.len() + h.len() > MAX_HEADER_BYTES_TOTAL {
+            return respond_json(
+                &mut stream,
+                431,
+                "{\"error\":\"too many or too large request headers\"}",
+            );
+        }
+        let lower = h.to_ascii_lowercase();
+        if let Some(v) = lower.strip_prefix("content-length:") {
+            match v.trim().parse::<u64>() {
+                Ok(n) if content_length.is_none() || content_length == Some(n) => {
+                    content_length = Some(n);
+                }
+                _ => {
+                    return respond_json(
+                        &mut stream,
+                        400,
+                        "{\"error\":\"invalid or conflicting Content-Length\"}",
+                    );
+                }
+            }
+        }
+        if lower.starts_with("transfer-encoding:") && lower.contains("chunked") {
+            chunked = true;
         }
         headers.push_str(&h);
     }
+    // #193: never trust the header verbatim — refuse chunked outright, then
+    // cap the body and reject with 413 *before* allocating; the read itself
+    // stays bounded and a truncated body is a clean 400.
+    if chunked {
+        return respond_json(
+            &mut stream,
+            411,
+            "{\"error\":\"chunked Transfer-Encoding not supported; send Content-Length\"}",
+        );
+    }
+    let needs_body = matches!(method.as_str(), "POST" | "PUT");
+    let content_length = match content_length {
+        Some(n) => n,
+        None if needs_body => {
+            return respond_json(
+                &mut stream,
+                400,
+                "{\"error\":\"missing Content-Length on POST/PUT\"}",
+            );
+        }
+        None => 0,
+    };
+    let max_body = max_body_bytes();
+    if content_length > max_body {
+        return respond_json(
+            &mut stream,
+            413,
+            &format!("{{\"error\":\"request body exceeds the {max_body}-byte limit\"}}"),
+        );
+    }
     let mut body = Vec::new();
     if content_length > 0 {
-        body = vec![0u8; content_length as usize];
-        reader
-            .read_exact(&mut body)
-            .map_err(|e| format!("body: {e}"))?;
+        let body_len = match usize::try_from(content_length) {
+            Ok(n) => n,
+            Err(_) => {
+                return respond_json(&mut stream, 413, "{\"error\":\"request body too large\"}");
+            }
+        };
+        body = vec![0u8; body_len];
+        if reader.read_exact(&mut body).is_err() {
+            return respond_json(&mut stream, 400, "{\"error\":\"truncated request body\"}");
+        }
     }
     let path = target.split('?').next().unwrap_or("/").to_string();
 
@@ -1390,8 +1507,17 @@ fn write_response(
 ) -> Result<(), String> {
     let reason = match status {
         200 => "OK",
+        201 => "Created",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        409 => "Conflict",
+        411 => "Length Required",
+        413 => "Content Too Large",
+        431 => "Request Header Fields Too Large",
+        500 => "Internal Server Error",
         _ => "Error",
     };
     let head = format!(
