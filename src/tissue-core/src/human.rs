@@ -189,6 +189,26 @@ fn yaml_scalar(v: &Value) -> String {
         .to_string()
 }
 
+/// #195: YAML double-quoted scalar — safe inside a flow sequence for any
+/// string (unlike `yaml_scalar`, which quotes for block context only).
+fn yaml_dquote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\x{:02X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn string_field(mapping: &Mapping, key: &str) -> Result<String> {
     match mapping.get(Value::String(key.to_string())) {
         Some(Value::String(s)) => Ok(s.clone()),
@@ -453,15 +473,19 @@ impl IssueFile {
                 "tags",
                 if self.tags.is_empty() {
                     "[]".to_string()
+                } else if self.tags.iter().all(|t| valid_tag(t)) {
+                    // Plain flow scalars are safe for the restricted charset
+                    // — byte-identical to the historical render.
+                    format!("[{}]", self.tags.join(", "))
                 } else {
-                    // #195: each tag through yaml_scalar, so even a
-                    // hand-edited special-char tag cannot corrupt the
-                    // flow sequence on write.
+                    // #195: hand-edited/imported special-char tags must stay
+                    // safe inside the flow sequence — yaml_scalar quotes for
+                    // block context only, so double-quote each element here.
                     format!(
                         "[{}]",
                         self.tags
                             .iter()
-                            .map(|t| yaml_scalar(&Value::String(t.clone())))
+                            .map(|t| yaml_dquote(t))
                             .collect::<Vec<_>>()
                             .join(", ")
                     )
@@ -809,12 +833,21 @@ mod tests {
         file.add_tag("v2_rollout", "x").unwrap();
         assert_eq!(file.tags, vec!["needs-review", "v2_rollout"]);
 
-        // A hand-edited front matter carrying special-char tags must
-        // serialize safely and re-parse to the same tags.
-        let src = "---\nid: IAM-9\ntitle: T\nstatus: open\ntags: [\"a, b\", \"x]y\"]\ncreated: x\nupdated: x\n---\n\nBody\n";
-        let parsed = IssueFile::parse(src).unwrap();
-        assert_eq!(parsed.tags, vec!["a, b".to_string(), "x]y".to_string()]);
+        // A hand-edited front matter carrying special-char tags must survive
+        // the CANONICAL render (a mutation invalidates the raw cache) and
+        // re-parse to the same tags — flow-safe quoting, no corruption.
+        let src = "---\nid: IAM-9\ntitle: T\nstatus: open\ntags: [\"a, b\", \"x]y\", \"a\\\"b\"]\ncreated: x\nupdated: x\n---\n\nBody\n";
+        let mut parsed = IssueFile::parse(src).unwrap();
+        assert_eq!(
+            parsed.tags,
+            vec!["a, b".to_string(), "x]y".to_string(), "a\"b".to_string()]
+        );
+        parsed.add_tag("v2_rollout", "x").unwrap(); // forces canonical render
         let out = parsed.serialize();
+        assert!(
+            out.contains("tags: [\"a, b\", \"x]y\", \"a\\\"b\", \"v2_rollout\"]"),
+            "flow-safe quoting: {out}"
+        );
         let reparsed = IssueFile::parse(&out).unwrap();
         assert_eq!(
             reparsed.tags, parsed.tags,
