@@ -693,9 +693,13 @@ async function renderProjects() {
         return;
     try {
         const projects = await loadProjects();
-        // Counts per prefix from the loaded issue list (existing endpoints only).
+        // #201: counts per prefix from a fresh UNFILTERED /api/issues (existing
+        // endpoints only) — the global allIssues can be filtered/stale when a
+        // project is active, which made other projects show 0.
+        const fresh = await fetchJson("/api/issues").catch(() => null);
+        const countSource = fresh ? fresh.issues : allIssues;
         const counts = new Map();
-        for (const i of allIssues) {
+        for (const i of countSource) {
             const p = projectOf(i.id);
             const c = (_a = counts.get(p)) !== null && _a !== void 0 ? _a : { open: 0, review: 0, total: 0 };
             c.total += 1;
@@ -720,7 +724,7 @@ async function renderProjects() {
             var _a;
             const c = (_a = counts.get(p.prefix)) !== null && _a !== void 0 ? _a : { open: 0, review: 0, total: 0 };
             return `<li class="issue-row project-row">
-          <a class="issue-link issue-title" href="#/issues">${esc(p.name)}</a>
+          <a class="issue-link issue-title" href="#/issues?project=${esc(encodeURIComponent(p.prefix))}">${esc(p.name)}</a>
           <span class="badge project-badge">${esc(p.prefix)}</span>
           ${p.default ? '<span class="badge">default</span>' : ""}
           <span class="hint">${c.total} issue(s) · ${c.open} open · ${c.review} awaiting decision</span>
@@ -737,17 +741,8 @@ async function renderProjects() {
       ${tokenBarHtml()}`;
         bindTokenBar();
         bindNewProject();
-        // Clicking a project row filters the issue list to that project.
-        document.querySelectorAll(".project-row").forEach((row, idx) => {
-            row.addEventListener("click", () => {
-                const select = document.getElementById("project-select");
-                if (select && projects[idx]) {
-                    select.value = projects[idx].prefix;
-                    select.dispatchEvent(new Event("change"));
-                    window.location.hash = "#/issues";
-                }
-            });
-        });
+        // #201: row navigation is the anchor's #/issues?project=<prefix> href;
+        // route() applies the param to the switcher.
     }
     catch (e) {
         el.innerHTML = `<p class="error">${esc(e instanceof Error ? e.message : String(e))}</p>`;
@@ -1568,6 +1563,15 @@ async function route() {
         return;
     }
     await loadIssues();
+    // #201: #/issues?project=<prefix> (project row links) selects the project.
+    const q = hash.split("?")[1];
+    if (q) {
+        const p = new URLSearchParams(q).get("project");
+        const select = document.getElementById("project-select");
+        if (p && select && Array.from(select.options).some((o) => o.value === p)) {
+            select.value = p;
+        }
+    }
     const view = /^#\/(review|releases|projects|settings)/.exec(hash);
     if (view && view[1] === "review") {
         updateNav("review");

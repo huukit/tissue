@@ -523,7 +523,7 @@ body {
 /* #178: Projects page rows */
 .project-row { cursor: pointer; }
 .project-row .hint { color: var(--muted, #666); font-size: 0.85em; margin-left: 0.5em; }
-.project-badge { border: 1px solid var(--border, #ccc); border-radius: 3px; padding: 0 4px; font-size: 0.8em; }
+.project-badge { border: 1px solid var(--border, #ccc); border-radius: 3px; padding: 0 4px; font-size: 0.8em; text-transform: none; }
 .project-block { margin-bottom: 1em; }
 
 /* ==========================================================================

@@ -647,3 +647,82 @@ fn releases_empty_state_has_create_button() {
         "listed after create: {status} {body}"
     );
 }
+
+/// #201: Projects page counts come from a fresh unfiltered /api/issues, row
+/// links carry #/issues?project=<prefix>, route() applies the param to the
+/// switcher, and the prefix badge is not uppercased.
+#[test]
+fn projects_page_counts_nav_and_prefix_case() {
+    let repo = Scratch::new("projects-201");
+    assert!(repo
+        .tissue(&["project", "add", "ops", "OPS"])
+        .status
+        .success());
+    assert!(repo
+        .tissue(&["create", "IAM-1", "iam issue", "--body", "b"])
+        .status
+        .success());
+    assert!(repo
+        .tissue(&[
+            "create",
+            "OPS-1",
+            "ops one",
+            "--project",
+            "ops",
+            "--body",
+            "b"
+        ])
+        .status
+        .success());
+    assert!(repo
+        .tissue(&[
+            "create",
+            "OPS-2",
+            "ops two",
+            "--project",
+            "ops",
+            "--body",
+            "b"
+        ])
+        .status
+        .success());
+    let server = start_server(&repo);
+    let addr = server.addr;
+
+    // The unfiltered list carries every project's issues (count source).
+    let (status, body) = get(&addr, "/api/issues");
+    assert!(status.contains("200"), "{status}");
+    for id in ["IAM-1", "OPS-1", "OPS-2"] {
+        assert!(body.contains(id), "unfiltered list has {id}: {body}");
+    }
+
+    let (status, js) = get(&addr, "/app.js");
+    assert!(status.contains("200"), "{status}");
+    assert!(
+        js.contains("#/issues?project="),
+        "project row links carry ?project=: app.js"
+    );
+    assert!(
+        js.contains("URLSearchParams") && js.contains("get(\"project\")"),
+        "route reads ?project=: app.js"
+    );
+    assert!(
+        js.contains("countSource"),
+        "counts use the fresh unfiltered list: app.js"
+    );
+
+    // Prefix badge renders as-is (no uppercase transform).
+    let (status, css) = get(&addr, "/style.css");
+    assert!(status.contains("200"), "{status}");
+    let badge_rule = css
+        .split(".project-badge")
+        .nth(1)
+        .unwrap_or("")
+        .split('}')
+        .next()
+        .unwrap_or("");
+    assert!(
+        badge_rule.contains("text-transform: none"),
+        "project badge keeps prefix case: {badge_rule}"
+    );
+}
