@@ -459,6 +459,35 @@ body {
 }
 .key-field input {
   flex: 1;
+
+/* #174: masked token list + show-once secret box on Settings. */
+.token-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.token-list li {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+.token-list .rec-ts {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.token-list .btn {
+  margin-left: auto;
+}
+.token-once {
+  border: 1px solid var(--badge-review);
+  background: var(--badge-review-bg);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  margin: 0.6rem 0;
+ — settings-only, masked, never logged; legacy api_token migrates (#174))
 }
 
 /* #170: Human/AI tab split on the issue detail. */

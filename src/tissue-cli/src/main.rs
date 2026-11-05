@@ -531,6 +531,16 @@ fn token_cmd(repo: &Path, command: TokenCommands) -> Result<(), String> {
     require_repo(repo)?;
     let grepo = git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
     let store = tissue_core::tokens::TokenStore::new(grepo);
+    // #174: a legacy plaintext `api_token:` line is migrated to hash-only
+    // storage (one commit) on the first `token list` / `token issue`.
+    let migrate = matches!(command, TokenCommands::List | TokenCommands::Issue { .. });
+    if migrate {
+        match store.migrate_legacy(&tissue_author(), &now_utc()) {
+            Ok(true) => println!("migrated legacy plaintext `api_token:` line to a hash-only `tokens:` entry (one commit; the plaintext stays in git history — rotate if that matters)"),
+            Ok(false) => {}
+            Err(e) => return Err(format!("legacy token migration failed: {e}")),
+        }
+    }
     match command {
         TokenCommands::Issue { label } => {
             let (secret, id) = store
@@ -544,7 +554,7 @@ fn token_cmd(repo: &Path, command: TokenCommands) -> Result<(), String> {
         TokenCommands::List => {
             let entries = store.list()?;
             if store.has_legacy_plaintext_token() {
-                println!("note: legacy plaintext `api_token:` line in config.yml — migrate with `tissue token issue` + remove the line (a plaintext token lands in git history)");
+                println!("note: legacy plaintext `api_token:` line still in config.yml (migration failed or was skipped)");
             }
             if entries.is_empty() {
                 println!("no managed tokens");

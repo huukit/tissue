@@ -105,6 +105,21 @@ async function fetchJson(url) {
     }
     return (await res.json());
 }
+/** #174: GET with the bearer token (the token-management endpoints are
+ * authed even for reads — the list is masked, only issue returns a secret). */
+async function fetchAuthed(url) {
+    var _a;
+    const token = getToken();
+    const res = await fetch(url, {
+        method: "GET",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    const data = (await res.json().catch(() => null));
+    if (!res.ok) {
+        throw new Error((_a = data === null || data === void 0 ? void 0 : data.error) !== null && _a !== void 0 ? _a : `request failed: ${res.status}`);
+    }
+    return data;
+}
 function statusClass(status) {
     if (status === "open")
         return "status-open";
@@ -828,7 +843,7 @@ async function renderReleaseDetail(id) {
  * field is write-only and only ever used to print a one-time hint for
  * `.tissue/secrets.yml` / env — the API stores just the `api_key_ref`. */
 async function renderSettings() {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _o, _p;
     const el = app();
     if (!el)
         return;
@@ -881,6 +896,23 @@ async function renderSettings() {
       <p id="cfg-result" class="edit-result" aria-live="polite"></p>
       <h3>Current config (whitelisted)</h3>
       <pre id="cfg-view" class="cfg-view">loading…</pre>
+      <h3>API tokens</h3>
+      <p class="settings-note">The token value is shown <strong>only once</strong>, right
+        after issue — copy it then. The list shows id/label/created, never the secret.
+        Managing tokens needs the API token itself (the field at the top).</p>
+      <div id="tokens-list" class="tokens-list">loading…</div>
+      <label>New token label
+        <input id="token-label" type="text" placeholder="e.g. human:tuomas or agent:dev-1" aria-label="New token label">
+      </label>
+      <button id="token-issue" class="btn">Issue token</button>
+      <div id="token-once" class="token-once" hidden>
+        <p>New token — shown once, never again:</p>
+        <span class="key-field">
+          <input id="token-secret" type="text" readonly aria-label="New token value (shown once)">
+          <button id="token-copy" type="button" class="btn btn-ghost">Copy</button>
+        </span>
+      </div>
+      <p id="token-result" class="edit-result" aria-live="polite"></p>
     </div>`;
     bindTokenBar();
     let cfg = {};
@@ -988,6 +1020,120 @@ async function renderSettings() {
                 : msg;
         }
     });
+    await renderTokensSection();
+    (_o = document.getElementById("token-issue")) === null || _o === void 0 ? void 0 : _o.addEventListener("click", async () => {
+        const result = document.getElementById("token-result");
+        const labelEl = document.getElementById("token-label");
+        if (!result || !labelEl)
+            return;
+        const label = labelEl.value.trim();
+        if (!label || /\s/.test(label)) {
+            result.textContent = "Label is required and must be a single token (e.g. human:tuomas).";
+            return;
+        }
+        result.textContent = "…";
+        try {
+            const r = await postJson("/api/tokens", {
+                label,
+                actor: "human:gui",
+            });
+            const once = document.getElementById("token-once");
+            const secretEl = document.getElementById("token-secret");
+            if (once && secretEl) {
+                once.hidden = false;
+                secretEl.value = r.secret;
+                secretEl.focus();
+                secretEl.select();
+            }
+            result.textContent = `Issued ${r.id} (${r.label}) — copy the value now; it is shown only here.`;
+            labelEl.value = "";
+            await renderTokensSection();
+        }
+        catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            result.textContent = /401|token/i.test(msg)
+                ? "Issuing failed — set the API token first (the token API is itself token-protected)."
+                : msg;
+        }
+    });
+    (_p = document.getElementById("token-copy")) === null || _p === void 0 ? void 0 : _p.addEventListener("click", () => {
+        var _a;
+        const secretEl = document.getElementById("token-secret");
+        if (!secretEl)
+            return;
+        secretEl.select();
+        const done = () => {
+            const r = document.getElementById("token-result");
+            if (r)
+                r.textContent = "Copied to clipboard.";
+        };
+        if ((_a = navigator.clipboard) === null || _a === void 0 ? void 0 : _a.writeText) {
+            navigator.clipboard.writeText(secretEl.value).then(done, () => {
+                document.execCommand("copy");
+                done();
+            });
+        }
+        else {
+            document.execCommand("copy");
+            done();
+        }
+    });
+}
+/** #174: render the masked token list into the Settings page and bind the
+ * per-row Revoke buttons. Needs the bearer token; without it the section
+ * shows a hint instead of leaking anything. */
+async function renderTokensSection() {
+    const el = document.getElementById("tokens-list");
+    if (!el)
+        return;
+    try {
+        const data = await fetchAuthed("/api/tokens");
+        const legacyNote = data.legacy
+            ? `<p class="settings-note">A legacy plaintext <code>api_token:</code> line is still in
+         <code>config.yml</code> — it migrates to hash-only storage on the next
+         <code>tissue token list</code> / <code>token issue</code>.</p>`
+            : "";
+        const list = data.tokens.length === 0
+            ? `<p class="placeholder">No managed tokens.</p>`
+            : `<ul class="token-list">` +
+                data.tokens
+                    .map((t) => `<li>
+                <span class="issue-id">${esc(t.id)}</span>
+                <span>${esc(t.label)}</span>
+                <span class="rec-ts">${esc(t.created)}</span>
+                <button class="btn btn-reject" data-revoke="${esc(t.id)}">Revoke</button>
+              </li>`)
+                    .join("") +
+                `</ul>`;
+        el.innerHTML = legacyNote + list;
+        el.querySelectorAll("[data-revoke]").forEach((b) => {
+            b.addEventListener("click", async () => {
+                var _a;
+                const id = (_a = b.dataset.revoke) !== null && _a !== void 0 ? _a : "";
+                const result = document.getElementById("token-result");
+                try {
+                    await postJson(`/api/tokens/${encodeURIComponent(id)}/revoke`, { actor: "human:gui" });
+                    if (result)
+                        result.textContent = `Revoked ${id} — it now fails closed.`;
+                    await renderTokensSection();
+                }
+                catch (e) {
+                    if (result) {
+                        const msg = e instanceof Error ? e.message : String(e);
+                        result.textContent = /401|token/i.test(msg)
+                            ? "Revoke failed — set the API token first."
+                            : msg;
+                    }
+                }
+            });
+        });
+    }
+    catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        el.innerHTML = `<p class="error">${esc(/401|token/i.test(msg)
+            ? "Set the API token first (top of this page) to manage tokens."
+            : msg)}</p>`;
+    }
 }
 function renderInline(text) {
     let s = esc(text);

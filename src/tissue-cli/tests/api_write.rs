@@ -952,5 +952,227 @@ fn create_issue_project_validation_shared() {
     assert!(
         status.contains("201"),
         "api create with project: {status} {body}"
+
+// ---------------------------------------------------------------------------
+// #174: the token value is visible only where intended — the Settings page
+// (GET/POST /api/tokens, authed) and once at CLI issue time. List/get/logs
+// carry no secret material; legacy plaintext api_token: migrates to hash-only.
+// ---------------------------------------------------------------------------
+
+/// #174 AC1/AC2: the token API is authed, masked, and one-commit-per-mutation;
+/// the issued secret works for writes and disappears from every read.
+#[test]
+fn tokens_api_issue_list_revoke_masked_and_authed() {
+    let repo = Scratch::new("tokens-api");
+    repo.set_token("legacy-secret-1"); // legacy plaintext api_token: line
+    let server = start_server(&repo);
+    let addr = server.addr;
+
+    // The token API itself requires a bearer token — even the masked list.
+    let (status, body) = get(&addr, "/api/tokens");
+    assert!(
+        status.contains("401"),
+        "list without token: {status} {body}"
+    );
+    let req = "GET /api/tokens HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer wrong\r\nConnection: close\r\n\r\n";
+    let (status, body) = http(&addr, req);
+    assert!(status.contains("401"), "list with wrong token: {status}");
+    assert!(!body.contains("legacy-secret-1"), "no echo: {body}");
+
+    // List with the legacy token: masked, flags the legacy line, no hashes.
+    let req = "GET /api/tokens HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer legacy-secret-1\r\nConnection: close\r\n\r\n";
+    let (status, body) = http(&addr, req);
+    assert!(status.contains("200"), "list: {status} {body}");
+    assert!(body.contains("\"legacy\":true"), "legacy flag: {body}");
+    assert!(body.contains("\"tokens\":[]"), "empty list: {body}");
+    assert!(!body.contains("legacy-secret-1"), "no plaintext: {body}");
+    assert!(!body.contains("sha256"), "no hashes either: {body}");
+
+    // Issue: the secret appears exactly once, in the issue response.
+    let before = repo.commit_count();
+    let (status, _, body) = post(
+        &addr,
+        "/api/tokens",
+        r#"{"label":"gui-test","actor":"human:gui"}"#,
+        Some("legacy-secret-1"),
+    );
+    assert!(status.contains("201"), "issue: {status} {body}");
+    assert!(
+        body.contains("\"secret\":"),
+        "secret in issue response: {body}"
+    );
+    let secret = body
+        .split("\"secret\":\"")
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .expect("secret present")
+        .to_string();
+    assert!(!secret.is_empty());
+    assert_eq!(repo.commit_count(), before + 1, "issue = one commit");
+    let cfg = std::fs::read_to_string(repo.root.join(".tissue/config.yml")).unwrap();
+    assert!(
+        !cfg.contains(&secret),
+        "secret never stored plaintext: {cfg}"
+    );
+    assert!(cfg.contains("sha256:"), "hash-only storage: {cfg}");
+
+    // The new token works for writes.
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues",
+        r#"{"id":"IAM-5","title":"via new token","actor":"human:gui"}"#,
+        Some(&secret),
+    );
+    assert!(
+        status.contains("201"),
+        "write with issued token: {status} {body}"
+    );
+
+    // List now shows the entry, still masked.
+    let req = "GET /api/tokens HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer legacy-secret-1\r\nConnection: close\r\n\r\n".to_string();
+    let (status, body) = http(&addr, &req);
+    assert!(
+        status.contains("200") && body.contains("gui-test"),
+        "listed: {body}"
+    );
+    assert!(!body.contains(&secret), "list leaks no secret: {body}");
+    assert!(!body.contains("sha256"), "list leaks no hashes: {body}");
+
+    // GET /api/config never carries token material of any kind.
+    let (status, body) = get(&addr, "/api/config");
+    assert!(status.contains("200"));
+    assert!(!body.contains("api_token"), "config view: {body}");
+    assert!(
+        !body.contains("\"tokens\""),
+        "tokens block not in config view: {body}"
+    );
+    assert!(
+        !body.contains(&secret) && !body.contains("legacy-secret-1"),
+        "{body}"
+    );
+
+    // Duplicate label -> 409; unknown revoke -> 404.
+    let (status, _, _) = post(
+        &addr,
+        "/api/tokens",
+        r#"{"label":"gui-test"}"#,
+        Some("legacy-secret-1"),
+    );
+    assert!(status.contains("409"), "dup label: {status}");
+    let (status, _, _) = post(
+        &addr,
+        "/api/tokens/tok-99/revoke",
+        r#"{"actor":"human:gui"}"#,
+        Some("legacy-secret-1"),
+    );
+    assert!(status.contains("404"), "unknown id: {status}");
+
+    // Revoke fails closed: one commit, the secret stops working.
+    let before = repo.commit_count();
+    let (status, _, body) = post(
+        &addr,
+        "/api/tokens/tok-01/revoke",
+        r#"{"actor":"human:gui"}"#,
+        Some("legacy-secret-1"),
+    );
+    assert!(status.contains("200"), "revoke: {status} {body}");
+    assert_eq!(repo.commit_count(), before + 1, "revoke = one commit");
+    let (status, _, _) = post(
+        &addr,
+        "/api/issues",
+        r#"{"id":"IAM-6","title":"x","actor":"human:gui"}"#,
+        Some(&secret),
+    );
+    assert!(
+        status.contains("401"),
+        "revoked token fails closed: {status}"
+    );
+}
+
+/// #174 migration: a legacy plaintext `api_token:` line is migrated to a
+/// hash-only `tokens:` entry (one commit) on `token list` / `token issue`,
+/// and the old secret keeps working afterwards.
+#[test]
+fn legacy_api_token_migrates_to_hash_only_on_cli() {
+    let repo = Scratch::new("legacy-migrate");
+    repo.set_token("legacy-secret-2");
+    let before = repo.commit_count();
+    let out = repo.tissue(&["token", "list"]);
+    assert!(out.status.success(), "token list failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("migrated"), "migration announced: {stdout}");
+    assert_eq!(repo.commit_count(), before + 1, "migration = one commit");
+    let cfg = std::fs::read_to_string(repo.root.join(".tissue/config.yml")).unwrap();
+    assert!(!cfg.contains("legacy-secret-2"), "plaintext gone: {cfg}");
+    assert!(
+        !cfg.lines()
+            .any(|l| l.trim_start().starts_with("api_token:")),
+        "line removed: {cfg}"
+    );
+    assert!(cfg.contains("sha256:"), "hash entry stored: {cfg}");
+    // A second list does not migrate again.
+    let before = repo.commit_count();
+    let out = repo.tissue(&["token", "list"]);
+    assert!(out.status.success());
+    assert_eq!(repo.commit_count(), before, "idempotent");
+    // The old secret still authenticates serve (now via the hash entry).
+    let server = start_server(&repo);
+    let (status, _, body) = post(
+        &server.addr,
+        "/api/issues",
+        r#"{"id":"IAM-2","title":"post-migration","actor":"human:gui"}"#,
+        Some("legacy-secret-2"),
+    );
+    assert!(
+        status.contains("201"),
+        "legacy secret still works: {status} {body}"
+    );
+
+    // `token issue` also migrates a legacy line.
+    let repo2 = Scratch::new("legacy-migrate-issue");
+    repo2.set_token("legacy-secret-3");
+    let out = repo2.tissue(&["token", "issue", "--label", "human:test"]);
+    assert!(out.status.success(), "{out:?}");
+    let cfg2 = std::fs::read_to_string(repo2.root.join(".tissue/config.yml")).unwrap();
+    assert!(!cfg2.contains("legacy-secret-3"), "{cfg2}");
+    assert!(cfg2.contains("sha256:"), "{cfg2}");
+}
+
+/// #174 AC2: serve's own logs never contain the token value.
+#[test]
+fn serve_logs_never_contain_the_token() {
+    let repo = Scratch::new("log-audit");
+    let mut server =
+        start_server_with_env(&repo, &[("TISSUE_API_TOKEN", "super-secret-env-token")]);
+    let addr = server.addr;
+    // A read and a failed write (wrong token), then a real write.
+    let _ = get(&addr, "/api/issues");
+    let _ = post(
+        &addr,
+        "/api/issues",
+        r#"{"id":"IAM-1","title":"x"}"#,
+        Some("wrong"),
+    );
+    let (status, _, _) = post(
+        &addr,
+        "/api/issues",
+        r#"{"id":"IAM-1","title":"ok","actor":"human:gui"}"#,
+        Some("super-secret-env-token"),
+    );
+    assert!(status.contains("201"), "{status}");
+    let _ = server.child.kill();
+    let _ = server.child.wait();
+    let mut logs = String::new();
+    if let Some(mut so) = server.child.stdout.take() {
+        use std::io::Read as _;
+        let _ = so.read_to_string(&mut logs);
+    }
+    if let Some(mut se) = server.child.stderr.take() {
+        use std::io::Read as _;
+        let _ = se.read_to_string(&mut logs);
+    }
+    assert!(
+        !logs.contains("super-secret-env-token"),
+        "token in serve logs: {logs}"
     );
 }

@@ -162,6 +162,11 @@ fn api_route(
     project_prefix: Option<&str>,
 ) -> Result<(), String> {
     let rest = rest.trim_matches('/');
+    // #174: token management API — every verb is bearer-authed (the list is
+    // masked; only POST /api/tokens returns the secret, exactly once).
+    if rest == "tokens" || rest.starts_with("tokens/") {
+        return api_tokens_route(stream, method, rest, repo, headers, body);
+    }
     // Write endpoints (agent API, #80): POST only, token-protected.
     // A GET on a write route is refused with 405 (write path is POST-only).
     if method == "POST" {
@@ -557,6 +562,172 @@ fn bearer_token(headers: &str) -> Option<String> {
     })
 }
 
+/// Shared bearer gate for write-ish routes (#159/#174): 503 when no token
+/// is configured at all, 401 on missing/invalid/revoked. The token value is
+/// never logged or echoed. Returns Ok(true) when authed; Ok(false) when the
+/// error response was already sent (caller must stop).
+fn require_bearer(stream: &mut TcpStream, repo: &Path, headers: &str) -> Result<bool, String> {
+    if !write_auth_configured(repo) {
+        respond_json(
+            stream,
+            503,
+            "{\"error\":\"write API disabled: no token configured (tissue token issue, or TISSUE_API_TOKEN env)\"}",
+        )?;
+        return Ok(false);
+    }
+    match bearer_token(headers) {
+        Some(provided) if resolve_token(repo, &provided).is_some() => Ok(true),
+        Some(_) => {
+            respond_json(stream, 401, "{\"error\":\"invalid or revoked token\"}")?;
+            Ok(false)
+        }
+        None => {
+            respond_json(
+                stream,
+                401,
+                "{\"error\":\"missing Authorization: Bearer <token> header\"}",
+            )?;
+            Ok(false)
+        }
+    }
+}
+
+/// #174: token management for the Settings page. Every verb is
+/// bearer-authed. `GET /api/tokens` lists id/label/created (masked — never
+/// hashes, never secrets) plus a `legacy` flag when a plaintext `api_token:`
+/// line still exists; `POST /api/tokens {"label"}` issues one and returns
+/// the secret exactly once; `POST /api/tokens/<id>/revoke` fails closed.
+/// Each mutation is one commit via TokenStore (hash-only storage).
+fn api_tokens_route(
+    stream: &mut TcpStream,
+    method: &str,
+    rest: &str,
+    repo: &Path,
+    headers: &str,
+    body: &[u8],
+) -> Result<(), String> {
+    if !require_bearer(stream, repo, headers)? {
+        return Ok(());
+    }
+    let rest = rest.trim_matches('/');
+    let Some(store) = token_store(repo) else {
+        return respond_json(stream, 500, "{\"error\":\"opening git repo\"}");
+    };
+    if rest == "tokens" {
+        return match method {
+            "GET" => {
+                let entries = store.list()?;
+                let items: Vec<String> = entries
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "{{\"id\":{},\"label\":{},\"created\":{}}}",
+                            json_str(&t.id),
+                            json_str(&t.label),
+                            json_str(&t.created)
+                        )
+                    })
+                    .collect();
+                let legacy = store.has_legacy_plaintext_token();
+                respond_json(
+                    stream,
+                    200,
+                    &format!("{{\"tokens\":[{}],\"legacy\":{}}}", items.join(","), legacy),
+                )
+            }
+            "POST" => {
+                let payload = match std::str::from_utf8(body) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        return respond_json(stream, 400, "{\"error\":\"body must be UTF-8 JSON\"}")
+                    }
+                };
+                let v = match parse_json_body(payload) {
+                    Ok(v) => v,
+                    Err(code) => {
+                        return respond_json(
+                            stream,
+                            code,
+                            "{\"error\":\"body must be a JSON object: {\\\"label\\\"}\"}",
+                        )
+                    }
+                };
+                let Some(label) = json_field(&v, "label") else {
+                    return respond_json(
+                        stream,
+                        400,
+                        "{\"error\":\"body must have a string field: label\"}",
+                    );
+                };
+                let actor_id = json_field(&v, "actor").unwrap_or("human:gui");
+                let author = tissue_core::git::Author {
+                    name: actor_id.to_string(),
+                    email: format!("{actor_id}@tissue.local"),
+                };
+                match store.issue(label, &author, &crate::now_utc()) {
+                    Ok((secret, id)) => respond_json(
+                        stream,
+                        201,
+                        &format!(
+                            "{{\"id\":{},\"label\":{},\"secret\":{}}}",
+                            json_str(&id),
+                            json_str(label),
+                            json_str(&secret)
+                        ),
+                    ),
+                    Err(tissue_core::tokens::TokenError::DuplicateLabel(m)) => {
+                        respond_json(stream, 409, &format!("{{\"error\":{}}}", json_str(&m)))
+                    }
+                    Err(e) => respond_json(
+                        stream,
+                        400,
+                        &format!("{{\"error\":{}}}", json_str(&e.to_string())),
+                    ),
+                }
+            }
+            _ => respond_json(stream, 405, "{\"error\":\"method not allowed\"}"),
+        };
+    }
+    if let Some(tail) = rest.strip_prefix("tokens/") {
+        if method == "POST" && tail.ends_with("/revoke") {
+            let id = tail.strip_suffix("/revoke").unwrap_or(tail);
+            let payload = match std::str::from_utf8(body) {
+                Ok(s) => s,
+                Err(_) => {
+                    return respond_json(stream, 400, "{\"error\":\"body must be UTF-8 JSON\"}")
+                }
+            };
+            let v = parse_json_body(payload).unwrap_or(serde_json::Value::Null);
+            let actor_id = json_field(&v, "actor").unwrap_or("human:gui");
+            let author = tissue_core::git::Author {
+                name: actor_id.to_string(),
+                email: format!("{actor_id}@tissue.local"),
+            };
+            return match store.revoke(id, &author) {
+                Ok(entry) => respond_json(
+                    stream,
+                    200,
+                    &format!(
+                        "{{\"revoked\":{},\"label\":{}}}",
+                        json_str(&entry.id),
+                        json_str(&entry.label)
+                    ),
+                ),
+                Err(tissue_core::tokens::TokenError::UnknownId(m)) => {
+                    respond_json(stream, 404, &format!("{{\"error\":{}}}", json_str(&m)))
+                }
+                Err(e) => respond_json(
+                    stream,
+                    400,
+                    &format!("{{\"error\":{}}}", json_str(&e.to_string())),
+                ),
+            };
+        }
+        return respond_json(stream, 404, "{\"error\":\"unknown api route\"}");
+    }
+    respond_json(stream, 404, "{\"error\":\"unknown api route\"}")
+}
+
 fn api_write_route(
     stream: &mut TcpStream,
     rest: &str,
@@ -568,25 +739,8 @@ fn api_write_route(
     // presented token resolves against the env override, the managed
     // hash-only `tokens:` entries, or a legacy plaintext line — all with
     // constant-time compares.
-    if !write_auth_configured(repo) {
-        return respond_json(
-            stream,
-            503,
-            "{\"error\":\"write API disabled: no token configured (tissue token issue, or TISSUE_API_TOKEN env)\"}",
-        );
-    }
-    match bearer_token(headers) {
-        Some(provided) if resolve_token(repo, &provided).is_some() => {}
-        Some(_) => {
-            return respond_json(stream, 401, "{\"error\":\"invalid or revoked token\"}");
-        }
-        None => {
-            return respond_json(
-                stream,
-                401,
-                "{\"error\":\"missing Authorization: Bearer <token> header\"}",
-            );
-        }
+    if !require_bearer(stream, repo, headers)? {
+        return Ok(());
     }
     let payload = match std::str::from_utf8(body) {
         Ok(s) => s,

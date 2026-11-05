@@ -469,7 +469,24 @@ The token is resolved in this order on each write:
 2. **Managed `tokens:` entries** (hash-only) via `tissue token issue`.
 3. **Legacy `api_token:` line in `.tissue/config.yml`** (pre-#159 repos):
    still works, but a plaintext token there lands permanently in history —
-   `tissue token list` reports it as a migration item. Prefer (1) or (2).
+   the first `tissue token list` / `token issue` **migrates it automatically**
+   to a hash-only `tokens:` entry and removes the plaintext line (one
+   commit; the old secret keeps working). Prefer (1) or (2).
+
+### Token visibility (#174)
+
+The token *value* is shown exactly once — at issue time (CLI prints it, and
+the Settings page's **API tokens** section shows it once with a copy button
+after `POST /api/tokens`). Everywhere else it is masked or absent:
+
+- `GET /api/tokens` (bearer-authed) lists `id`/`label`/`created` — never the
+  secret, never even the hash; it also reports `legacy: true` while a
+  plaintext `api_token:` line still exists.
+- `POST /api/tokens {"label"}` → `201 {"id","label","secret"}` (the one
+  showing); duplicate label → 409. `POST /api/tokens/<id>/revoke` → `200`,
+  fails closed immediately; unknown id → 404.
+- `GET /api/config` never includes `api_token` or the `tokens:` block.
+- serve's startup note and logs never print a token value.
 
 Absent/empty everywhere means the write API is disabled (explicit 503 on
 every write attempt); a revoked or wrong token gets 401.

@@ -209,6 +209,54 @@ impl TokenStore {
         Ok(out)
     }
 
+    /// #174: one-time migration of a legacy plaintext `api_token:` line to
+    /// a hash-only managed entry, then remove the plaintext line from the
+    /// git-tracked config. One commit. Returns Ok(true) when a migration
+    /// happened. The old secret keeps working — its hash is stored.
+    /// (The plaintext remains in git history; the note says so.)
+    pub fn migrate_legacy(&self, actor: &Author, now: &str) -> Result<bool, String> {
+        let Some(legacy) = legacy_plaintext_token(self.repo.root()) else {
+            return Ok(false);
+        };
+        let hash = sha256_hex(legacy.as_bytes());
+        let mut entries = self.list()?;
+        if !entries.iter().any(|t| t.sha256 == hash) {
+            let id = format!("tok-{:02}", entries.len() + 1);
+            entries.push(TokenEntry {
+                id,
+                label: "api_token (legacy line, migrated)".to_string(),
+                sha256: hash,
+                created: now.to_string(),
+            });
+        }
+        self.rewrite_entries(&entries)?;
+        // Remove the top-level api_token: line (plaintext must not stay in
+        // the tracked file).
+        let path = self.config_path();
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("reading {}: {e}", path.display()))?;
+        let mut out = String::new();
+        for line in text.lines() {
+            let trimmed = line.trim_start();
+            if !line.starts_with(' ')
+                && !line.starts_with('\t')
+                && trimmed.starts_with("api_token:")
+            {
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+        std::fs::write(&path, out).map_err(|e| format!("writing {}: {e}", path.display()))?;
+        self.repo
+            .commit_all(
+                actor,
+                "token migrate: legacy plaintext api_token: -> hash-only tokens: entry",
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+
     /// True when a legacy plaintext `api_token:` line exists (migration item).
     pub fn has_legacy_plaintext_token(&self) -> bool {
         std::fs::read_to_string(self.config_path())
@@ -534,6 +582,59 @@ mod tests {
             legacy_plaintext_token(&dir).as_deref(),
             Some("plain-secret")
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migrate_legacy_moves_plaintext_to_hash_only() {
+        let dir = std::env::temp_dir().join(format!(
+            "tissue-tok-migrate-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join(".tissue")).unwrap();
+        let repo = Repo::init(&dir).unwrap();
+        std::fs::write(
+            dir.join(".tissue/config.yml"),
+            "project: demo\napi_token: \"legacy-plain\"\n",
+        )
+        .unwrap();
+        repo.commit_all(
+            &Author {
+                name: "t".into(),
+                email: "t@t".into(),
+            },
+            "test config",
+        )
+        .unwrap();
+        let store = TokenStore::new(repo.clone());
+        let author = Author {
+            name: "t".into(),
+            email: "t@t".into(),
+        };
+        assert!(store
+            .migrate_legacy(&author, "2026-01-01T00:00:00Z")
+            .unwrap());
+        let text = std::fs::read_to_string(dir.join(".tissue/config.yml")).unwrap();
+        assert!(!text.contains("legacy-plain"), "{text}");
+        assert!(
+            !text
+                .lines()
+                .any(|l| l.trim_start().starts_with("api_token:")),
+            "{text}"
+        );
+        let entries = store.list().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].sha256, sha256_hex(b"legacy-plain"));
+        // idempotent: second call is a no-op
+        assert!(!store
+            .migrate_legacy(&author, "2026-01-01T00:00:01Z")
+            .unwrap());
+        // the migrated secret resolves
+        assert!(store.resolve("legacy-plain", None).is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

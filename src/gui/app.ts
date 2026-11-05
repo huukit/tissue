@@ -209,6 +209,29 @@ async function fetchJson<T>(url: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** #174: GET with the bearer token (the token-management endpoints are
+ * authed even for reads — the list is masked, only issue returns a secret). */
+async function fetchAuthed<T>(url: string): Promise<T> {
+  const token = getToken();
+  const res = await fetch(url, {
+    method: "GET",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  const data = (await res.json().catch(() => null)) as { error?: string } | null;
+  if (!res.ok) {
+    throw new Error(data?.error ?? `request failed: ${res.status}`);
+  }
+  return data as T;
+}
+
+/** #174: managed token as served by GET /api/tokens (masked — no hashes,
+ * no secrets). */
+interface TokenEntryView {
+  id: string;
+  label: string;
+  created: string;
+}
+
 function statusClass(status: string): string {
   if (status === "open") return "status-open";
   if (status === "in-progress") return "status-in-progress";
@@ -1000,6 +1023,23 @@ async function renderSettings(): Promise<void> {
       <p id="cfg-result" class="edit-result" aria-live="polite"></p>
       <h3>Current config (whitelisted)</h3>
       <pre id="cfg-view" class="cfg-view">loading…</pre>
+      <h3>API tokens</h3>
+      <p class="settings-note">The token value is shown <strong>only once</strong>, right
+        after issue — copy it then. The list shows id/label/created, never the secret.
+        Managing tokens needs the API token itself (the field at the top).</p>
+      <div id="tokens-list" class="tokens-list">loading…</div>
+      <label>New token label
+        <input id="token-label" type="text" placeholder="e.g. human:tuomas or agent:dev-1" aria-label="New token label">
+      </label>
+      <button id="token-issue" class="btn">Issue token</button>
+      <div id="token-once" class="token-once" hidden>
+        <p>New token — shown once, never again:</p>
+        <span class="key-field">
+          <input id="token-secret" type="text" readonly aria-label="New token value (shown once)">
+          <button id="token-copy" type="button" class="btn btn-ghost">Copy</button>
+        </span>
+      </div>
+      <p id="token-result" class="edit-result" aria-live="polite"></p>
     </div>`;
   bindTokenBar();
   let cfg: ConfigView = {};
@@ -1101,6 +1141,119 @@ async function renderSettings(): Promise<void> {
         : msg;
     }
   });
+
+  await renderTokensSection();
+  document.getElementById("token-issue")?.addEventListener("click", async () => {
+    const result = document.getElementById("token-result");
+    const labelEl = document.getElementById("token-label") as HTMLInputElement | null;
+    if (!result || !labelEl) return;
+    const label = labelEl.value.trim();
+    if (!label || /\s/.test(label)) {
+      result.textContent = "Label is required and must be a single token (e.g. human:tuomas).";
+      return;
+    }
+    result.textContent = "…";
+    try {
+      const r = await postJson<{ id: string; label: string; secret: string }>("/api/tokens", {
+        label,
+        actor: "human:gui",
+      });
+      const once = document.getElementById("token-once");
+      const secretEl = document.getElementById("token-secret") as HTMLInputElement | null;
+      if (once && secretEl) {
+        once.hidden = false;
+        secretEl.value = r.secret;
+        secretEl.focus();
+        secretEl.select();
+      }
+      result.textContent = `Issued ${r.id} (${r.label}) — copy the value now; it is shown only here.`;
+      labelEl.value = "";
+      await renderTokensSection();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      result.textContent = /401|token/i.test(msg)
+        ? "Issuing failed — set the API token first (the token API is itself token-protected)."
+        : msg;
+    }
+  });
+  document.getElementById("token-copy")?.addEventListener("click", () => {
+    const secretEl = document.getElementById("token-secret") as HTMLInputElement | null;
+    if (!secretEl) return;
+    secretEl.select();
+    const done = () => {
+      const r = document.getElementById("token-result");
+      if (r) r.textContent = "Copied to clipboard.";
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(secretEl.value).then(done, () => {
+        document.execCommand("copy");
+        done();
+      });
+    } else {
+      document.execCommand("copy");
+      done();
+    }
+  });
+}
+
+/** #174: render the masked token list into the Settings page and bind the
+ * per-row Revoke buttons. Needs the bearer token; without it the section
+ * shows a hint instead of leaking anything. */
+async function renderTokensSection(): Promise<void> {
+  const el = document.getElementById("tokens-list");
+  if (!el) return;
+  try {
+    const data = await fetchAuthed<{ tokens: TokenEntryView[]; legacy: boolean }>("/api/tokens");
+    const legacyNote = data.legacy
+      ? `<p class="settings-note">A legacy plaintext <code>api_token:</code> line is still in
+         <code>config.yml</code> — it migrates to hash-only storage on the next
+         <code>tissue token list</code> / <code>token issue</code>.</p>`
+      : "";
+    const list =
+      data.tokens.length === 0
+        ? `<p class="placeholder">No managed tokens.</p>`
+        : `<ul class="token-list">` +
+          data.tokens
+            .map(
+              (t) => `<li>
+                <span class="issue-id">${esc(t.id)}</span>
+                <span>${esc(t.label)}</span>
+                <span class="rec-ts">${esc(t.created)}</span>
+                <button class="btn btn-reject" data-revoke="${esc(t.id)}">Revoke</button>
+              </li>`
+            )
+            .join("") +
+          `</ul>`;
+    el.innerHTML = legacyNote + list;
+    el.querySelectorAll<HTMLButtonElement>("[data-revoke]").forEach((b) => {
+      b.addEventListener("click", async () => {
+        const id = b.dataset.revoke ?? "";
+        const result = document.getElementById("token-result");
+        try {
+          await postJson<{ revoked: string }>(
+            `/api/tokens/${encodeURIComponent(id)}/revoke`,
+            { actor: "human:gui" }
+          );
+          if (result) result.textContent = `Revoked ${id} — it now fails closed.`;
+          await renderTokensSection();
+        } catch (e) {
+          if (result) {
+            const msg = e instanceof Error ? e.message : String(e);
+            result.textContent = /401|token/i.test(msg)
+              ? "Revoke failed — set the API token first."
+              : msg;
+          }
+        }
+      });
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    el.innerHTML = `<p class="error">${esc(
+      /401|token/i.test(msg)
+        ? "Set the API token first (top of this page) to manage tokens."
+        : msg
+    )}</p>`;
+  }
 }
 
 function renderInline(text: string): string {
