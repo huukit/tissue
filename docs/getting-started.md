@@ -42,21 +42,30 @@ cargo build --release
 # binary: src/target/release/tissue
 ```
 
-## The 3-step first run
+## The first run
 
 ```sh
-tissue init                          # 1. create the issue repo
-tissue create DOC-1 "Write docs"     # 2. add your first issue
-tissue token issue --label human:me  # 3. issue a write-API token (printed once)
-tissue serve                         # 4. browse it
+tissue init                          # 1. create the issue repo (creates the default project)
+tissue project add ops OPS           # 2. optional: a second project
+tissue create IAM-1 "Write docs" --body "..."   # 3. add your first issue (signed to a project)
+tissue token issue --label human:me  # 4. issue a write-API token (printed once)
+tissue serve                         # 5. browse it
 ```
 
 Open <http://127.0.0.1:7323> — you should see your issue listed. Paste the
-token into the GUI's token bar to unlock write actions; the "+ New issue"
-button on the issues list creates issues straight from the browser. The
+token into the GUI's token bar to unlock write actions. Projects are the
+main unit: the project selector sits at the **top of the left sidebar**,
+and the **Projects** page (`#/projects`) lists every project with issue
+counts and a "+ New project" button. New issues are always signed to a
+project (#172/#176) — the "+ New issue" form has a project selector, there
+is no silent default prefix. Issue detail splits **Human** (issue.md) and
+**AI** (stream, proposals, approve/reject) into tabs. The
 **Settings** view (sidebar) shows the non-secret config — including the
-optional `agent:` block that makes the Sync button invoke your agent — and
-the footer shows the version, API version, and license (`GET /api/meta`).
+optional `agent:` block (command mode or HTTP-endpoint mode with the API
+key kept out of the tracked config) that makes the Sync button invoke your
+agent — plus token management (issue/list/revoke; secrets shown once, only
+here). The footer shows the version, API version, and license
+(`GET /api/meta`). The Releases view has a "+ New release" button.
 
 `tissue init` creates a `.tissue/` directory in the current directory
 (or the one you name) and initializes it as its own standalone git

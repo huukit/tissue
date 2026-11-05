@@ -51,8 +51,10 @@ container is unreachable *by design* — the port is never published.
 
 Bootstrap (`tissue init`) runs on the host with a local binary: the
 final image contains only the tissue binary, and `init` needs the git
-CLI. The container is for **viewing and read-only commands** against an
-existing issue repo.
+CLI. The container serves the full GUI against an existing issue repo:
+reads are tokenless, and write actions work once you paste a repo token
+(`tissue token issue`, stored as a hash only in the repo's config) into
+the GUI's token bar — the same token-authed write API as on bare metal.
 
 ## Next
 

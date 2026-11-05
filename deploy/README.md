@@ -140,7 +140,20 @@ This is the only document you need for one-time setup.
    ```
 
 From now on: publish a new Release → the box picks it up within 15 minutes,
-verifies, swaps, and restarts. No manual steps.
+verifies, swaps, and restarts. **One manual step per release:** the timer
+upgrades the *binary* only — compare the unit files with this repo's
+`deploy/` at the new tag and refresh if they differ (#167; the upgrade
+script logs a `STALE unit` / EROFS warning when it detects the mismatch):
+
+```sh
+for u in tissue.service tissue-upgrade.service tissue-upgrade.timer; do
+  curl -fsSL "https://raw.githubusercontent.com/huukit/tissue/vX.Y.Z/deploy/$u" \
+    | sudo tee "/etc/systemd/system/$u" >/dev/null
+  sudo systemctl cat "$u" | cmp -s - <(curl -fsSL "https://raw.githubusercontent.com/huukit/tissue/vX.Y.Z/deploy/$u") || echo "$u changed"
+done
+sudo systemctl daemon-reload && sudo systemctl restart tissue.service
+sudo -u tissue test -w /srv/tissue-issues && echo "write path OK"
+```
 
 ## First start fails? (#131)
 

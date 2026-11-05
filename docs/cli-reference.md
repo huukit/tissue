@@ -491,3 +491,22 @@ after `POST /api/tokens`). Everywhere else it is masked or absent:
 Absent/empty everywhere means the write API is disabled (explicit 503 on
 every write attempt); a revoked or wrong token gets 401.
 
+
+---
+
+## `tissue dev-fixture` (#171, hidden test-data generator)
+
+Creates an issue whose human and AI sides are deliberately out of sync, for
+smoke passes. **Hidden and guarded**: refuses to run unless
+`dev_fixtures: true` is set in `.tissue/config.yml`, so it can never touch a
+real repo by accident.
+
+```sh
+tissue dev-fixture IAM-9 --scenario human-edited     # human edited, not synced
+tissue dev-fixture IAM-9 --scenario agent-proposed   # proposal pending review
+tissue dev-fixture IAM-9 --scenario both-changed     # conflict case
+tissue dev-fixture IAM-9 --scenario agent-created-pending
+tissue dev-fixture IAM-9 --scenario synced-clean --seed 42   # deterministic
+```
+
+See `docs/workflow.md` for the scenario semantics.

@@ -100,8 +100,10 @@ refused as stale.
    proposals with before/after context, approve or reject them in the
    browser, edit front matter (conflict-safe), sync your edits (which
    also runs the configured agent, see above), and
-   create issues and projects right from the list view ("+ New issue",
-   "+ New project") — every GUI action lands as the same git commit as
+   create issues and projects right from the browser ("+ New issue" with a
+   project selector, the Projects page's "+ New project", the Releases
+   view's "+ New release"; the issue detail splits Human/AI tabs) — every
+   GUI action lands as the same git commit as
    its CLI twin. The **Settings** view shows and edits the non-secret
    config (`agent:` block, `remote`) via the token-protected config API;
    the API token itself is never displayed there.
