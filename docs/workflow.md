@@ -77,7 +77,7 @@ tissue propose IAM-42 --field status --current open \
 ```
 
 The proposal is recorded in `agent.jsonl`, the issue is tagged
-`needs-review` (surfaced as `NEEDS REVIEW` in `tissue list`), and a
+`needs-review` (surfaced as `[awaiting decision]` in `tissue list`), and a
 human decides:
 
 ```sh
@@ -93,10 +93,10 @@ refused as stale.
 ## The daily loop
 
 **Human:**
-1. `tissue list` — triage; anything tagged `NEEDS REVIEW` needs you.
+1. `tissue list` — triage; anything flagged `[awaiting decision]` needs you.
 2. Read the proposal (`tissue show IAM-42`), then `approve` or `reject`.
 3. Edit `issue.md` as needed, then `tissue sync IAM-42 --summary ...`.
-4. `tissue serve` for the GUI: triage the needs-review queue, read
+4. `tissue serve` for the GUI: triage the awaiting-decision queue, read
    proposals with before/after context, approve or reject them in the
    browser, edit front matter (conflict-safe), sync your edits (which
    also runs the configured agent, see above), and

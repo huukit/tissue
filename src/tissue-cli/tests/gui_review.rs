@@ -1,4 +1,4 @@
-//! End-to-end tests for the GUI review surface (#98): the Needs Review
+//! End-to-end tests for the GUI review surface (#98): the awaiting-decision
 //! data path and the approve/reject loop over the token-authenticated
 //! API — exactly what the browser does, minus the browser. Pins:
 //! proposals and records are readable without a token (loopback read),

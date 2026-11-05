@@ -145,7 +145,10 @@ fn all_scenarios_generate_expected_list_states() {
             .unwrap_or_else(|| panic!("{id} ({scenario}) in list: {list}"));
         assert!(line.contains(touch), "{id} last-touch {touch}: {line}");
         if scenario != "synced-clean" && scenario != "human-edited" {
-            assert!(line.contains("[NEEDS REVIEW]"), "{id} needs review: {line}");
+            assert!(
+                line.contains("[awaiting decision]"),
+                "{id} awaiting decision: {line}"
+            );
         }
     }
     // agent-created-pending has no issue.md yet, only a draft in the stream.

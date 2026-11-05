@@ -76,9 +76,10 @@ Commits: exactly one, `create <ID>: <TITLE>`.
 
 ## `tissue list`
 
-List issues; issues awaiting review are flagged `NEEDS REVIEW`. A pending
+List issues; issues awaiting a human decision are flagged `[awaiting decision]`
+(display label per #210 — the stored tag and API field remain `needs-review`). A pending
 agent create-proposal (directory with a stream but no `issue.md` yet,
-#139) is listed as `<ID>  (pending proposal)  <draft title>  [ai-proposal] [NEEDS REVIEW]`
+#139) is listed as `<ID>  (pending proposal)  <draft title>  [ai-proposal] [awaiting decision]`
 — no warning; after approval it becomes a normal row (#154).
 
 ```sh

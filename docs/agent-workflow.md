@@ -27,7 +27,7 @@ CLI runs as a trusted local actor).
 
 | Action | Who | What happens |
 |---|---|---|
-| Create an issue | agent | `POST /api/issues` with an `agent:*` actor → **creation proposal**: draft in `agent.jsonl`, `needs-review` in the list, `issue.md` written only on human approval |
+| Create an issue | agent | `POST /api/issues` with an `agent:*` actor → **creation proposal**: draft in `agent.jsonl`, shown `[awaiting decision]` in the list (stored tag `needs-review`), `issue.md` written only on human approval |
 | Create an issue | human | `tissue create ID "Title"` (or GUI "+ New issue") → `issue.md` immediately; first `sync` establishes the AI baseline |
 | Edit the human format | human | edit `issue.md`, then `tissue sync ID --summary "…"` → field-level diff recorded in a `human-sync` record |
 | Edit the human format | agent | `tissue propose …` → proposal + `needs-review`; a human approves/rejects |
@@ -76,8 +76,8 @@ recorded, never fatal to the sync.
 
 - `tissue list` shows derived **last touch** per issue: `[human]` /
   `[synced]` / `[ai-proposal]` (#138, computed from the stream, never stale).
-- Pending create-proposals list as `(pending proposal)` rows (#154) and in
-  the GUI/API as `needs-review`.
+- Pending create-proposals list as `(pending proposal)` rows (#154), shown as
+  `awaiting decision` in the GUI/#210 (the API field stays `needs-review`).
 - Every mutation is exactly one git commit (`agent-run` adds a second on
   agent-invoking syncs); `git log` in the issue repo is the audit trail.
 

@@ -88,7 +88,8 @@ enum Commands {
         #[arg(long, value_name = "NAME")]
         project: Option<String>,
     },
-    /// List issues; issues awaiting review are flagged `NEEDS REVIEW`.
+    /// List issues; issues awaiting a human decision are flagged `[awaiting decision]`
+    /// (stored tag: `needs-review`).
     List {
         /// Show only issues with these statuses (open, in-progress, closed).
         #[arg(long, value_name = "STATUS")]
@@ -742,7 +743,7 @@ fn propose_cmd(
     let proposal_id = core
         .propose(id, &actor, &draft)
         .map_err(|e| format!("propose: {e}"))?;
-    println!("proposed {id}/{proposal_id}: tagged needs-review, awaiting human decision");
+    println!("proposed {id}/{proposal_id}: awaiting your decision (stored tag: needs-review)");
     Ok(())
 }
 
@@ -923,7 +924,7 @@ fn list(
                         }
                         any = true;
                         println!(
-                            "{name}  (pending proposal)  {title}  [ai-proposal] [NEEDS REVIEW]"
+                            "{name}  (pending proposal)  {title}  [ai-proposal] [awaiting decision]"
                         );
                         continue;
                     }
@@ -948,7 +949,7 @@ fn list(
         }
         any = true;
         let flag = if issue.needs_review() {
-            " [NEEDS REVIEW]"
+            " [awaiting decision]"
         } else {
             ""
         };
@@ -999,7 +1000,7 @@ fn show(repo: &Path, id: &str) -> Result<(), String> {
                 println!("id:      {id}");
                 println!("title:   {title} (pending proposal {pid})");
                 println!("status:  (pending approval — no issue.md yet)");
-                println!("review:  NEEDS REVIEW — approve the proposal to create issue.md");
+                println!("review:  AWAITING DECISION — approve the proposal to create issue.md");
                 println!();
                 println!("{}", body.trim_end());
                 return Ok(());
@@ -1025,7 +1026,7 @@ fn show(repo: &Path, id: &str) -> Result<(), String> {
     println!("created: {}", issue.created);
     println!("updated: {}", issue.updated);
     if issue.needs_review() {
-        println!("review:  NEEDS REVIEW — a proposal awaits your decision");
+        println!("review:  AWAITING DECISION — a proposal awaits your decision");
     }
     println!();
     println!("{}", issue.body.trim_end());

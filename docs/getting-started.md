@@ -115,7 +115,7 @@ own config). Use `--dir` whenever you want to control that placement.
 ## The GUI and its API token
 
 `tissue serve`'s GUI is the full review surface: browse issues (with
-project filters and search), work the needs-review queue (approve/reject
+project filters and search), work the awaiting-decision queue (approve/reject
 in the browser), read the agent-stream timeline, and edit front matter
 with conflict-safe semantics.
 

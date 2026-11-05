@@ -9,10 +9,10 @@
  *   POST /api/releases     -> 201 { created, title } | 400/409/401 { error }  (#173)
  *
  * Stage 1 (#96): app shell with sidebar navigation
- * (Issues / Needs Review / Releases), a project switcher derived from
+ * (Issues / Awaiting Decision / Releases), a project switcher derived from
  * issue-ID prefixes (honoring serve's --project filter when the server
  * already scopes the data), status filtering, and search by id/title.
- * Releases and Needs Review render placeholder views in this stage.
+ * Releases and Awaiting Decision render placeholder views in this stage.
  *
  * Stage 4 (#99): human editing + sync — the first mutating controls.
  * Token lives in sessionStorage ONLY (never persisted server-side, never
@@ -240,7 +240,7 @@ function statusClass(status: string): string {
 
 function badgeHtml(tags: string[]): string {
   return tags.includes(NEEDS_REVIEW)
-    ? `<span class="badge-review" title="An unreviewed proposal exists">NEEDS REVIEW</span>`
+    ? `<span class="badge-review" title="An agent proposed a change (or a new issue); you approve or reject it. Nothing in the human format changes until you decide.">AWAITING DECISION</span>`
     : "";
 }
 
@@ -725,14 +725,14 @@ async function renderReviewQueue(): Promise<void> {
   if (!el) return;
   const flagged = allIssues.filter((i) => i.tags.includes(NEEDS_REVIEW));
   el.innerHTML = `
-    <h2 class="view-title">Needs Review</h2>
+    <h2 class="view-title">Awaiting your decision</h2>
     ${tokenBarHtml()}`;
   bindTokenBar();
   if (flagged.length === 0) {
     el.insertAdjacentHTML(
       "beforeend",
-      `<p class="placeholder">Nothing waiting for review. Proposals tagged
-      <code>needs-review</code> appear here.</p>`
+      `<p class="placeholder">Nothing awaiting your decision yet. Proposals (stored
+      tag <code>needs-review</code>) appear here.</p>`
     );
     return;
   }
@@ -750,7 +750,7 @@ async function renderReviewQueue(): Promise<void> {
   if (entries.length === 0) {
     el.insertAdjacentHTML(
       "beforeend",
-      `<p class="placeholder">${flagged.length} issue(s) tagged needs-review but no
+      `<p class="placeholder">${flagged.length} issue(s) awaiting your decision but no
       pending proposals could be read.</p>`
     );
     return;
@@ -851,7 +851,7 @@ async function renderProjects(): Promise<void> {
           <a class="issue-link issue-title" href="#/issues">${esc(p.name)}</a>
           <span class="badge project-badge">${esc(p.prefix)}</span>
           ${p.default ? '<span class="badge">default</span>' : ""}
-          <span class="hint">${c.total} issue(s) · ${c.open} open · ${c.review} needs-review</span>
+          <span class="hint">${c.total} issue(s) · ${c.open} open · ${c.review} awaiting decision</span>
         </li>`;
       })
       .join("");
@@ -1597,7 +1597,7 @@ async function renderDetail(id: string, tab: "human" | "ai" = "human"): Promise<
             ? `<ul class="proposal-list">${proposals
                 .map((p) => proposalCardDetailHtml({ ...p, issue_id: id }))
                 .join("")}</ul>`
-            : `<p class="placeholder">No pending proposals. <a class="issue-link" href="#/review">Open the review queue</a></p>`
+            : `<p class="placeholder">No pending proposals. <a class="issue-link" href="#/review">Open the queue</a></p>`
         }
       </section>`;
     // #189: surface the last agent-run outcome as a visible banner on the AI
@@ -1621,7 +1621,7 @@ async function renderDetail(id: string, tab: "human" | "ai" = "human"): Promise<
         <dt>last touch</dt><dd>${lastTouchBadge(issue)}</dd>
         ${
           issue.tags.includes(NEEDS_REVIEW)
-            ? `<dt>review</dt><dd><a class="issue-link" href="#/review">needs-review — open the queue</a></dd>`
+            ? `<dt>awaiting decision</dt><dd><a class="issue-link" href="#/review">open the queue</a></dd>`
             : ""
         }
       </dl>
@@ -1640,7 +1640,7 @@ async function renderDetail(id: string, tab: "human" | "ai" = "human"): Promise<
         <div class="tabs" role="tablist">
           <button class="tab${tab === "human" ? " active" : ""}" data-tab="human" role="tab">Human</button>
           <button class="tab${tab === "ai" ? " active" : ""}" data-tab="ai" role="tab">AI${
-            proposals.length > 0 ? ` (${proposals.length} needs review)` : ""
+            proposals.length > 0 ? ` (${proposals.length} awaiting decision)` : ""
           }</button>
         </div>
         ${tab === "ai" ? aiPane : humanPane}

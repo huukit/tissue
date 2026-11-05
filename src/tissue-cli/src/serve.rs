@@ -1082,7 +1082,7 @@ fn api_write_append_record(
 }
 
 /// GET /api/issues/<id>/proposals: pending proposals with review context.
-/// Read-only; serves the GUI Needs Review queue (#98).
+/// Read-only; serves the GUI awaiting-decision queue (#98, displayed label per #210).
 fn api_issue_proposals(stream: &mut TcpStream, repo: &Path, id: &str) -> Result<(), String> {
     match crate::api_write::pending_proposals(repo, id) {
         Ok(proposals) => {

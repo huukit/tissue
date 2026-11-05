@@ -151,7 +151,7 @@ fn last_touch_transitions_e2e() {
     let list = Repo::stdout(&repo.tissue(&["list"]));
     assert!(list.contains("[synced]"), "after sync: {list}");
 
-    // Agent proposes -> "ai-proposal" (+ NEEDS REVIEW flag as today).
+    // Agent proposes -> "ai-proposal" (+ awaiting decision flag as today).
     let out = repo.tissue(&[
         "propose",
         "IAM-1",
@@ -167,7 +167,10 @@ fn last_touch_transitions_e2e() {
     Repo::assert_success(&out, "propose");
     let list = Repo::stdout(&repo.tissue(&["list"]));
     assert!(list.contains("[ai-proposal]"), "pending proposal: {list}");
-    assert!(list.contains("NEEDS REVIEW"), "flag still shown: {list}");
+    assert!(
+        list.contains("awaiting decision"),
+        "flag still shown: {list}"
+    );
 
     // Human approves -> back to "human".
     let out = repo.tissue(&["approve", "IAM-1", "prop-01"]);
@@ -302,7 +305,10 @@ fn full_dogfood_loop_e2e() {
     // list: both issues visible, no review flags
     let list = Repo::stdout(&repo.tissue(&["list"]));
     assert!(list.contains("IAM-1") && list.contains("IAM-2"));
-    assert!(!list.contains("NEEDS REVIEW"), "no flags expected: {list}");
+    assert!(
+        !list.contains("awaiting decision"),
+        "no flags expected: {list}"
+    );
 
     // sync: one commit, human-sync record in the stream. #136: the sync
     // records the field-level diff, so make a real human edit first
@@ -357,7 +363,7 @@ fn full_dogfood_loop_e2e() {
     );
     let list = Repo::stdout(&repo.tissue(&["list"]));
     assert!(
-        list.contains("IAM-1") && list.contains("NEEDS REVIEW"),
+        list.contains("IAM-1") && list.contains("awaiting decision"),
         "flag expected: {list}"
     );
 
@@ -373,7 +379,7 @@ fn full_dogfood_loop_e2e() {
     let issue = repo.read_issue("IAM-1");
     assert!(issue.contains("Renamed issue"), "title applied: {issue}");
     let list = Repo::stdout(&repo.tissue(&["list"]));
-    assert!(!list.contains("NEEDS REVIEW"), "tag cleared: {list}");
+    assert!(!list.contains("awaiting decision"), "tag cleared: {list}");
     let stream = repo.agent_stream("IAM-1");
     assert!(stream.contains("\"type\":\"approval\""));
 
@@ -409,7 +415,7 @@ fn stale_proposal_is_refused_and_never_clobbers() {
 
     // no proposal was created: no tag, no stream record, human format untouched
     let list = Repo::stdout(&repo.tissue(&["list"]));
-    assert!(!list.contains("NEEDS REVIEW"));
+    assert!(!list.contains("awaiting decision"));
     assert!(repo.agent_stream("IAM-1").is_empty(), "no stream records");
     let issue = repo.read_issue("IAM-1");
     assert!(issue.contains("First issue"), "human format untouched");
@@ -433,14 +439,17 @@ fn rejection_records_reason_and_clears_tag() {
     ]);
     Repo::assert_success(&out, "tissue propose");
     let list = Repo::stdout(&repo.tissue(&["list"]));
-    assert!(list.contains("NEEDS REVIEW"));
+    assert!(list.contains("awaiting decision"));
 
     let prop_id = proposal_id_from(&out);
     let out = repo.tissue(&["reject", "IAM-1", &prop_id, "--reason", "not done"]);
     Repo::assert_success(&out, "tissue reject");
 
     let list = Repo::stdout(&repo.tissue(&["list"]));
-    assert!(!list.contains("NEEDS REVIEW"), "tag cleared after reject");
+    assert!(
+        !list.contains("awaiting decision"),
+        "tag cleared after reject"
+    );
     let issue = repo.read_issue("IAM-1");
     assert!(issue.contains("open"), "human format untouched by reject");
     let stream = repo.agent_stream("IAM-1");
