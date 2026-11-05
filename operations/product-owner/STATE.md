@@ -107,3 +107,11 @@ tissue release cut <ver>
 - Spec `issue.md` front matter schema and `agent.jsonl` record types (incl. release records).
 - Spec API resource list.
 - Build order: core library → CLI → API → GUI.
+
+## Current status (2026-11-02, PO)
+
+- **v0.1.5 is published** (tag `v0.1.5`, main `334c79c`, 6 versioned assets) and deployed on the owner's box; the owner is running the **#140 smoke pass** now.
+- Smoke-pass findings so far: #167 (EROFS — box ran the pre-#158 unit; workaround `ReadWritePaths=/srv/tissue-issues`, permanent fix in deploy path), #175 (project not persisted via API/GUI), #176 (issues silently default to IAM- prefix), #168 (GUI controls/design pass), #169 (settings: HTTP agent endpoint + secret key, decision 13), #170 (issue view Human/AI split), #171 (out-of-sync fixture generator), #172 (project assignment on create), #173 (GUI create-release), #174 (token visible only on settings page).
+- **main is frozen at v0.1.5 until #140 is green.** Five PRs are verified and waiting behind the freeze: #160 (#159 tokens), #161 (#147 docs), #164 (#162 import dry-run), #165 (#163 runbook), #166 (#150 AGENTS.md note).
+- **v0.1.6 scope (next cut):** #167 deploy-unit fix, #175, #176, #169, #174+#159 (token lifecycle + settings tokens), #172, #173, then #170/#168/#171 polish. Owner-side: #149 repo rules, #150 checkbox, #140 smoke pass.
+- **#3 dogfood gates:** #140 green + #159 + #149. Prep (#162/#163) already done in PRs #164/#165.

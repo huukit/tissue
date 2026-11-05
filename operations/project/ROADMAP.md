@@ -47,13 +47,23 @@ main @ `862f3c8`, linear, CI green on head. The core loop is real and usable fro
 
 **main is frozen at v0.1.5 until the owner's #140 smoke pass is green (testing happens 2026-11-02).** Open PRs waiting behind the freeze: #160 (#159 token lifecycle), #161 (#147 docs).
 
-## Now — v0.1.6: trust & auth (gate for dogfooding)
+## Now — v0.1.6: smoke-pass fixes + trust & auth
 
-Owner ruling 2026-11-01: no dogfood switch before proper authentication.
+**v0.1.5 is published and deployed; the owner is running the #140 smoke pass. main is frozen at v0.1.5 (`334c79c`) until that pass is green.** Verified PRs waiting behind the freeze: #160 (#159), #161 (#147), #164 (#162), #165 (#163), #166 (#150).
 
-- **#159** token lifecycle: `tissue token issue/list/revoke`, hash-only storage in config.yml (no usable secret in git history), constant-time compare, per-actor human/agent tokens (PR #160, awaiting Tester)
-- **#147** v0.1.5 docs umbrella (PR #161) · **#148** release runbook · **#150** auto-delete merged branches + AGENTS.md lifecycle note · **#141** CI main-head run confirmation (fix already on main)
-- **#149** repo rules: owner-only PR approvals and `v*` tag pushes, read-only Actions default, 2FA — **owner action in Settings UI**, verify on the issue. Protects the root auto-upgrade path.
+Owner ruling 2026-11-01/02: no dogfood switch before proper authentication.
+
+Smoke-pass findings (filed 2026-11-02, dev queue order):
+- **#167** deploy: box ran the pre-#158 unit → EROFS on writes; fix = unit install/upgrade path + write-probe in README (workaround: `ReadWritePaths=/srv/tissue-issues`)
+- **#175** bug: GUI/API-created project not persisted (POST /api/projects unwired) · **#176** bug: issues silently default to IAM- prefix (part of #172)
+- **#169** settings page: HTTP agent endpoint (URL + model + key) per decision 13; key in gitignored secrets file, never in config/git · **#174** serve token visible only on the settings page
+- **#172** project assignment on issue create (GUI picker, CLI --project, API field) · **#173** GUI "+ New release" + POST /api/releases
+- **#170** issue view Human/AI split · **#168** GUI controls/design pass (owner sign-off) · **#171** dev-fixture generator for out-of-sync test data
+
+Trust & auth (dogfood gate):
+- **#159** token lifecycle: `tissue token issue/list/revoke`, hash-only storage, constant-time compare, per-actor tokens (PR #160) + #174
+- **#149** repo rules: owner-only PR approvals and `v*` tag pushes, read-only Actions default, 2FA — **owner action in Settings UI**
+- **#147** docs (PR #161) · **#148** runbook · **#150** hygiene · **#141** CI confirm
 
 ## Later — PoC dogfood switch (#3)
 
