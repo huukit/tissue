@@ -394,6 +394,10 @@ body {
   color: inherit;
 }
 .settings-note { font-size: 0.85rem; color: var(--muted); }
+/* #205: hosted-agent example note in the Agent connection section. */
+.agent-note { margin-bottom: 0.7rem; }
+.agent-note summary { cursor: pointer; }
+.agent-note pre { margin: 0.5rem 0; overflow-x: auto; }
 .cfg-view {
   background: var(--bg);
   padding: 0.75rem 1rem;

@@ -254,7 +254,10 @@ only the reference is ever visible. HTTP failures (401, timeouts,
 connection errors) are recorded as a failed `agent-run` record — the sync
 itself never fails. Note: this build ships no TLS, so `https://` endpoints
 are accepted in config but reported as unsupported at run time — use
-`http://` or a local TLS-terminating proxy.
+`http://` or a local TLS-terminating proxy. For a hosted agent such as
+Mistral, point `endpoint` at a local proxy forwarding to
+`https://api.mistral.ai/v1/chat/completions` (the Settings page shows this
+example inline, #205).
 
 The same settings are viewable and editable in the GUI under **Settings**
 (mode toggle, endpoint/model/key-reference, write-only key field with

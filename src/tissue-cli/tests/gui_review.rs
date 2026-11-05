@@ -868,3 +868,30 @@ fn settings_page_has_three_sections() {
         "meta repo_path: {status} {body}"
     );
 }
+
+/// #205: the Agent connection section carries a copy-pasteable hosted-agent
+/// (Mistral) example with the key-ref rule and the no-TLS transport note
+/// (this build refuses https:// endpoints; use a local TLS-terminating proxy).
+#[test]
+fn settings_agent_note_has_hosted_example() {
+    let repo = Scratch::new("settings-note-205");
+    let out = repo.tissue(&["create", "IAM-1", "x", "--body", "b"]);
+    assert!(out.status.success(), "{out:?}");
+    let server = start_server(&repo);
+    let (status, js) = get(&server.addr, "/app.js");
+    assert!(status.contains("200"), "{status}");
+    assert!(
+        js.contains("api.mistral.ai"),
+        "Mistral target in example: app.js"
+    );
+    assert!(js.contains("mistral-small-latest"), "example model: app.js");
+    assert!(js.contains("api_key_ref"), "key-ref rule: app.js");
+    assert!(
+        js.contains("unsupported-transport"),
+        "transport note: app.js"
+    );
+    assert!(
+        js.contains("TLS-terminating proxy"),
+        "proxy guidance: app.js"
+    );
+}

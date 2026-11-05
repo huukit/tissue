@@ -992,6 +992,23 @@ async function renderSettings(): Promise<void> {
       <p class="settings-note">Non-secret parts of <code>.tissue/config.yml</code>, saved
         via the write API and committed. The API token is never shown or accepted here —
         manage it in the API tokens section below.</p>
+      <details class="settings-note agent-note">
+        <summary>Point tissue at a hosted agent (example: Mistral)</summary>
+        <pre class="cfg-view">agent:
+  mode: http
+  endpoint: http://127.0.0.1:8443/v1/chat/completions  # local TLS proxy → https://api.mistral.ai
+  model: mistral-small-latest
+  api_key_ref: mistral   # key lives in .tissue/secrets.yml or TISSUE_AGENT_API_KEY — never in config.yml
+  timeout_sec: 60</pre>
+        <p>The agent receives a JSON envelope (#137: issue, revision, field diff,
+          stream tail) and returns a proposal or decision. Validate the setup with
+          the <strong>Test connection</strong> button below.</p>
+        <p><strong>Transport:</strong> this build ships no TLS — <code>https://</code>
+          endpoints are refused at run time (<code>unsupported-transport</code>). Put a
+          TLS-terminating proxy in front of the hosted API (forwarding to
+          <code>https://api.mistral.ai</code>) and point <code>endpoint</code> at the
+          proxy's <code>http://</code> address.</p>
+      </details>
       <label>Agent mode
         <select id="cfg-agent-mode" aria-label="Agent mode">
           <option value="none">None (sync stays record-only)</option>
