@@ -9,11 +9,15 @@ permissions:
   contents: read
 
 concurrency:
-  # PR runs may cancel each other; main pushes must never cancel the newest
-  # run — the head commit needs a recorded green run for release audits
-  # (#141: a rapid merge wave cancelled the final main run at 1s).
+  # Never cancel in-progress runs. The group is per-ref, so this only queues
+  # same-ref runs; main's head must always get a recorded green run for release
+  # audits. #141: `cancel-in-progress: ${{ github.event_name != 'push' }}` was
+  # NOT reliable in practice — the 2026-11-05 08:26-08:27Z merge burst cancelled
+  # all three main push runs (41994518098/41994533469/41994615247), leaving head
+  # 8955751 with no green run. A non-constant expression is treated as truthy,
+  # so the only robust guard is `false`.
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'push' }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
