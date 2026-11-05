@@ -771,10 +771,8 @@ async function renderReleases() {
         return;
     try {
         const releases = await fetchJson("/api/releases");
-        if (releases.length === 0) {
-            el.innerHTML = `<p class="placeholder">No releases in this issue repo yet.</p>`;
-            return;
-        }
+        // #206: never early-return on empty — the toolbar + create form must
+        // render so the first release can be created from the GUI.
         const rows = releases
             .slice()
             .sort((a, b) => b.id.localeCompare(a.id))

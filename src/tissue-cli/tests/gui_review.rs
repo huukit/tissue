@@ -602,5 +602,45 @@ fn token_input_only_on_settings() {
     assert!(
         status.contains("200") && !html.contains("api-token"),
         "index.html has no token input: {status}"
+/// #206: the Releases view renders the "+ New release" toolbar + form even
+/// on an empty repo (the v0.1.6 early-return hid them), and creating the
+/// first release from the GUI works end to end.
+#[test]
+fn releases_empty_state_has_create_button() {
+    let repo = Scratch::new("releases-empty-206");
+    // Issue a managed token (hash-only); legacy api_token: lines migrate on
+    // first `token list` (#174) and are not the default test path anymore.
+    let out = repo.tissue(&["token", "issue", "--label", "human:gui"]);
+    assert!(out.status.success(), "{out:?}");
+    let tok = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix("token: "))
+        .expect("secret")
+        .trim()
+        .to_string();
+    let server = start_server(&repo);
+    // Empty repo: GET /api/releases is [].
+    let (status, body) = get(&server.addr, "/api/releases");
+    assert!(
+        status.contains("200") && body.contains("[]"),
+        "{status} {body}"
+    );
+    // The app shell + app.js ship the new-release button/form wiring.
+    let (status, js) = get(&server.addr, "/app.js");
+    assert!(status.contains("200"), "{status}");
+    assert!(js.contains("new-release-btn"), "button id in app.js");
+    assert!(js.contains("new-release-form"), "form id in app.js");
+    // Create the first release via the API the button calls.
+    let (status, body) = post(
+        &server.addr,
+        "/api/releases",
+        r#"{"id":"v0.1.0","title":"First"}"#,
+        Some(&tok),
+    );
+    assert!(status.contains("201"), "{status} {body}");
+    let (status, body) = get(&server.addr, "/api/releases");
+    assert!(
+        status.contains("200") && body.contains("v0.1.0"),
+        "listed after create: {status} {body}"
     );
 }
