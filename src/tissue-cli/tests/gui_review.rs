@@ -498,3 +498,30 @@ fn issue_detail_ai_tab_ships_and_data_paths_read() {
         "proposals: {body}"
     );
 }
+
+/// #178: the Projects view data path — GET /api/projects lists every
+/// configured project (incl. issue-less ones), and the issue list carries
+/// the data the page needs for per-project counts. The sidebar/nav markup
+/// change is static HTML (project selector on top, Projects nav item).
+#[test]
+fn projects_page_data_path() {
+    let repo = Scratch::new("projects-page-178");
+    // Two projects, one of them issue-less — both must be listed (#175).
+    let out = repo.tissue(&["project", "add", "ops", "OPS"]);
+    assert!(out.status.success(), "{out:?}");
+    let out = repo.tissue(&["create", "IAM-1", "only issue", "--body", "b"]);
+    assert!(out.status.success(), "{out:?}");
+    let server = start_server(&repo);
+    let (status, body) = get(&server.addr, "/api/projects");
+    assert!(status.contains("200"), "{status} {body}");
+    assert!(
+        body.contains("\"prefix\":\"IAM\"") && body.contains("\"prefix\":\"OPS\""),
+        "{body}"
+    );
+    // Issue summary carries id (prefix derivable client-side) + status + tags.
+    let (status, body) = get(&server.addr, "/api/issues");
+    assert!(
+        status.contains("200") && body.contains("IAM-1"),
+        "{status} {body}"
+    );
+}

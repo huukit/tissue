@@ -29,11 +29,16 @@ const NEEDS_REVIEW = "needs-review";
 /** #175: the authoritative project list — GET /api/projects (the config
  * mapping), NOT issue-id prefixes: a project with zero issues must still
  * appear in the switcher, and a created project must survive reload. */
+/** #175/#178: the authoritative project list — GET /api/projects (the
+ * config mapping), NOT issue-id prefixes: a project with zero issues must
+ * still appear in the switcher and on the Projects page. */
 async function loadProjects() {
     var _a;
     const data = await fetchJson("/api/projects");
     return (_a = data.projects) !== null && _a !== void 0 ? _a : [];
 }
+/** #178: cached project list for forms/selectors, refreshed by loadIssues. */
+let cachedProjects = [];
 /** API token, sessionStorage only — never persisted server-side (#98 AC5). */
 const TOKEN_KEY = "tissue-api-token";
 function getToken() {
@@ -153,6 +158,9 @@ function knownProjects(issues) {
 }
 /** Populate the project switcher from GET /api/projects (#175: the config
  * mapping is authoritative — a project with no issues yet still shows). */
+/** #175/#178: populate the project switcher from GET /api/projects (the
+ * persisted config mapping is authoritative); issue-derived prefixes are
+ * unioned in as a fallback so ad-hoc prefixes still filter. */
 async function populateProjectSelect(issues) {
     const select = document.getElementById("project-select");
     if (!select)
@@ -167,6 +175,8 @@ async function populateProjectSelect(issues) {
         prefixes = knownProjects(issues);
     }
     // Union with issue-derived prefixes so ad-hoc prefixes still filter.
+    prefixes = cachedProjects.length ? cachedProjects.map((p) => p.prefix) : await loadProjects().then((ps) => ps.map((p) => p.prefix));
+    prefixes = [];
     prefixes = [...new Set([...prefixes, ...knownProjects(issues)])].sort();
     // Rebuild options: "All projects" + one per prefix.
     select.innerHTML =
@@ -230,6 +240,21 @@ function bindNewProject() {
             const select = document.getElementById("project-select");
             if (select)
                 select.value = prefix;
+            if (select) {
+                const opt = Array.from(select.options).find((o) => o.value === prefix);
+                if (opt)
+                    select.value = prefix;
+                else {
+                    const o = document.createElement("option");
+                    o.value = prefix;
+                    o.textContent = prefix;
+                    select.add(o);
+                    select.value = prefix;
+                }
+            }
+            // #178: if the Projects page is showing, re-render it with the new row.
+            if ((window.location.hash || "").startsWith("#/projects"))
+                await renderProjects();
         }
         catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
@@ -285,8 +310,6 @@ function bindSearch() {
 }
 /** The issue body template the CLI's `create` uses (#134). */
 const CREATE_BODY_TEMPLATE = "## Summary\n\nDescribe the issue.\n\n## Acceptance criteria\n\n- [ ] First criterion\n";
-/** #172/#176: the configured projects for the new-issue selector. */
-let cachedProjects = [];
 /** #134/#172/#176: "+ New issue" form — an explicit project selector
  * (populated from GET /api/projects, defaulting to the current filter or
  * the configured default project); the id prefix is derived from the
@@ -628,6 +651,88 @@ function bindNewRelease() {
                     : msg;
         }
     });
+}
+/** #178: the Projects page — every configured project with prefix,
+ * default marker, issue counts (derived client-side from GET /api/issues),
+ * a per-project link, and the "+ New project" create form (POST
+ * /api/projects, fixed in #175). */
+async function renderProjects() {
+    var _a;
+    const el = app();
+    if (!el)
+        return;
+    try {
+        const projects = await loadProjects();
+        // Counts per prefix from the loaded issue list (existing endpoints only).
+        const counts = new Map();
+        for (const i of allIssues) {
+            const p = projectOf(i.id);
+            const c = (_a = counts.get(p)) !== null && _a !== void 0 ? _a : { open: 0, review: 0, total: 0 };
+            c.total += 1;
+            if (i.status === "open" || i.status === "in-progress")
+                c.open += 1;
+            if (i.tags.includes("needs-review"))
+                c.review += 1;
+            counts.set(p, c);
+        }
+        if (projects.length === 0) {
+            el.innerHTML = `
+        <h2>Projects</h2>
+        <p class="loading">No projects configured yet — issues need a project (#176). Create the first one:</p>
+        ${newProjectFormHtml()}
+        ${tokenBarHtml()}`;
+            bindTokenBar();
+            bindNewProject();
+            return;
+        }
+        const rows = projects
+            .map((p) => {
+            var _a;
+            const c = (_a = counts.get(p.prefix)) !== null && _a !== void 0 ? _a : { open: 0, review: 0, total: 0 };
+            return `<li class="issue-row project-row">
+          <a class="issue-link issue-title" href="#/issues">${esc(p.name)}</a>
+          <span class="badge project-badge">${esc(p.prefix)}</span>
+          ${p.default ? '<span class="badge">default</span>' : ""}
+          <span class="hint">${c.total} issue(s) · ${c.open} open · ${c.review} needs-review</span>
+        </li>`;
+        })
+            .join("");
+        el.innerHTML = `
+      <div class="list-toolbar">
+        <h2>Projects</h2>
+        <button id="new-project-btn" class="btn" title="Create a project (needs the API token)">+ New project</button>
+      </div>
+      ${newProjectFormHtml()}
+      <ul class="issue-list">${rows}</ul>
+      ${tokenBarHtml()}`;
+        bindTokenBar();
+        bindNewProject();
+        // Clicking a project row filters the issue list to that project.
+        document.querySelectorAll(".project-row").forEach((row, idx) => {
+            row.addEventListener("click", () => {
+                const select = document.getElementById("project-select");
+                if (select && projects[idx]) {
+                    select.value = projects[idx].prefix;
+                    select.dispatchEvent(new Event("change"));
+                    window.location.hash = "#/issues";
+                }
+            });
+        });
+    }
+    catch (e) {
+        el.innerHTML = `<p class="error">${esc(e instanceof Error ? e.message : String(e))}</p>`;
+    }
+}
+/** #178: the "+ New project" create form (moved from the sidebar to the
+ * Projects page; #175/#166 semantics unchanged). */
+function newProjectFormHtml() {
+    return `<div id="new-project-form" class="new-project-form" hidden>
+    <input id="new-project-name" type="text" placeholder="name (e.g. ops)" aria-label="Project name">
+    <input id="new-project-prefix" type="text" placeholder="prefix (e.g. OPS)" aria-label="Issue-id prefix">
+    <button id="new-project-create" class="btn">Create</button>
+    <button id="new-project-cancel" class="btn btn-ghost">Cancel</button>
+    <p id="new-project-result" class="edit-result" aria-live="polite"></p>
+  </div>`;
 }
 async function renderReleases() {
     var _a;
@@ -1223,6 +1328,8 @@ async function loadIssues() {
         allIssues = [...data.issues].sort((a, b) => issueNumber(a.id) - issueNumber(b.id));
         // #175/#172: refresh the cached project list too — the new-issue form's
         // project selector reads it.
+        // #175/#178: refresh the cached project list too (switcher + Projects
+        // page + new-issue selector all read it).
         try {
             cachedProjects = await loadProjects();
         }
@@ -1252,7 +1359,7 @@ async function route() {
         return;
     }
     await loadIssues();
-    const view = /^#\/(review|releases|settings)/.exec(hash);
+    const view = /^#\/(review|releases|projects|settings)/.exec(hash);
     if (view && view[1] === "review") {
         updateNav("review");
         await renderReviewQueue();
@@ -1261,6 +1368,11 @@ async function route() {
     if (view && view[1] === "releases") {
         updateNav("releases");
         renderReleases();
+        return;
+    }
+    if (view && view[1] === "projects") {
+        updateNav("projects");
+        await renderProjects();
         return;
     }
     if (view && view[1] === "settings") {

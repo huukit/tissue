@@ -14,26 +14,21 @@
     </header>
     <div class="layout">
       <nav class="sidebar" aria-label="Main navigation">
+        <!-- #178: the project selector is the TOP element of the sidebar —
+             projects are the main unit; switching filters everything. -->
+        <div class="project-block">
+          <h3 class="sidebar-heading">Project</h3>
+          <select id="project-select" class="project-select" aria-label="Active project">
+            <option value="">All projects</option>
+          </select>
+        </div>
         <ul class="nav">
           <li><a href="#/issues" class="nav-link" data-view="issues">Issues</a></li>
           <li><a href="#/review" class="nav-link" data-view="review">Needs Review</a></li>
           <li><a href="#/releases" class="nav-link" data-view="releases">Releases</a></li>
+          <li><a href="#/projects" class="nav-link" data-view="projects">Projects</a></li>
           <li><a href="#/settings" class="nav-link" data-view="settings">Settings</a></li>
         </ul>
-        <div class="project-block">
-          <h3 class="sidebar-heading">Project</h3>
-          <select id="project-select" class="project-select" aria-label="Project filter">
-            <option value="">All projects</option>
-          </select>
-          <button id="new-project-btn" class="btn btn-ghost" title="Create a project (needs the API token)">+ New project</button>
-          <div id="new-project-form" class="new-project-form" hidden>
-            <input id="new-project-name" type="text" placeholder="name (e.g. ops)" aria-label="Project name">
-            <input id="new-project-prefix" type="text" placeholder="prefix (e.g. OPS)" aria-label="Issue-id prefix">
-            <button id="new-project-create" class="btn">Create</button>
-            <button id="new-project-cancel" class="btn btn-ghost">Cancel</button>
-            <p id="new-project-result" class="edit-result" aria-live="polite"></p>
-          </div>
-        </div>
         <div class="filter-block">
           <h3 class="sidebar-heading">Status</h3>
           <ul class="status-filter" id="status-filter">

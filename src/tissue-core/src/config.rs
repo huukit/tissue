@@ -877,12 +877,10 @@ mod tests {
         let (dir, _repo) = temp_repo();
         // A stub agent that appends a record file and echoes its env check.
         let stub = dir.join("stub-agent.sh");
-        std::fs::write(
+        write_stub(
             &stub,
             "#!/bin/sh\ncat >/dev/null\n[ -z \"$TISSUE_API_TOKEN\" ] || exit 3\n[ \"$1\" = \"sync IAM-1\" ] || exit 4\necho stub-ran >> stub-ran.txt\n",
-        )
-        .unwrap();
-        make_executable(&stub);
+        );
         let agent = AgentConfig {
             command: stub.to_string_lossy().to_string(),
             args: vec!["sync {issue}".into()],
@@ -903,8 +901,7 @@ mod tests {
     fn run_agent_nonzero_exit_and_timeout_are_recorded() {
         let (dir, _repo) = temp_repo();
         let fail = dir.join("fail-agent.sh");
-        std::fs::write(&fail, "#!/bin/sh\necho boom >&2\nexit 7\n").unwrap();
-        make_executable(&fail);
+        write_stub(&fail, "#!/bin/sh\necho boom >&2\nexit 7\n");
         let agent = AgentConfig {
             command: fail.to_string_lossy().to_string(),
             args: vec![],
@@ -919,8 +916,7 @@ mod tests {
         assert!(outcome.stderr_tail.contains("boom"));
 
         let slow = dir.join("slow-agent.sh");
-        std::fs::write(&slow, "#!/bin/sh\nsleep 30\n").unwrap();
-        make_executable(&slow);
+        write_stub(&slow, "#!/bin/sh\nsleep 30\n");
         let agent = AgentConfig {
             command: slow.to_string_lossy().to_string(),
             args: vec![],
@@ -943,8 +939,7 @@ mod tests {
     fn timeout_kills_the_whole_process_tree() {
         let (dir, _repo) = temp_repo();
         let spawner = dir.join("spawner-agent.sh");
-        std::fs::write(&spawner, "#!/bin/sh\nsleep 30 &\nsleep 30\n").unwrap();
-        make_executable(&spawner);
+        write_stub(&spawner, "#!/bin/sh\nsleep 30 &\nsleep 30\n");
         // Invoke via the shell interpreter: spawning the script file
         // directly can hit ETXTBSY when the write is still settling under
         // parallel test load.
@@ -970,6 +965,17 @@ mod tests {
     fn make_executable(p: &Path) {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Write a stub script via temp+rename so a spawn right after can never
+    /// hit ETXTBSY ("Text file busy") under disk pressure (CI flake seen on
+    /// #183's run: write-then-exec race).
+    #[cfg(unix)]
+    fn write_stub(p: &Path, contents: &str) {
+        let tmp = p.with_extension("tmp");
+        std::fs::write(&tmp, contents).unwrap();
+        make_executable(&tmp);
+        std::fs::rename(&tmp, p).unwrap();
     }
 
     #[cfg(not(unix))]
