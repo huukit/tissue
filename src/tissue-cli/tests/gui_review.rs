@@ -391,3 +391,56 @@ fn reject_via_api_records_reason_as_data() {
     assert_eq!(status, "200");
     assert!(body.contains("rejection"), "timeline rejection: {body}");
 }
+
+/// #175 AC1: a project created via POST /api/projects is persisted in
+/// config.yml + one commit AND survives a full serve restart (the owner's
+/// smoke-pass symptom: "created in the GUI, gone after reload" — the GUI
+/// switcher also derived from issue prefixes, so an issue-less project
+/// vanished; app.ts now reads GET /api/projects).
+#[test]
+fn projects_api_create_persists_across_restart() {
+    let repo = Scratch::new("projects-persist-175");
+    repo.set_token("gui-test-token");
+    let server = start_server(&repo);
+    let addr = server.addr;
+
+    let (status, body) = post(
+        &addr,
+        "/api/projects",
+        r#"{"name":"ops","prefix":"OPS","actor":"human:gui"}"#,
+        Some("gui-test-token"),
+    );
+    assert!(status.contains("201"), "create: {status} {body}");
+    // Response carries the created project (#175).
+    assert!(
+        body.contains("\"name\":\"ops\"") && body.contains("\"prefix\":\"OPS\""),
+        "{body}"
+    );
+    let config = std::fs::read_to_string(repo.root.join(".tissue/config.yml")).unwrap();
+    assert!(config.contains("ops: OPS"), "mapping written: {config}");
+    let commits = repo
+        .git(&["rev-list", "--count", "HEAD"])
+        .trim()
+        .to_string();
+
+    // Kill and restart serve; the project must still be listed.
+    drop(server);
+    let server2 = start_server(&repo);
+    let (status, body) = get(&server2.addr, "/api/projects");
+    assert!(status.contains("200"), "{status} {body}");
+    assert!(
+        body.contains("\"name\":\"ops\"") && body.contains("\"prefix\":\"OPS\""),
+        "project survives restart: {body}"
+    );
+    // Exactly one commit for the create, and the config commit is on disk.
+    let commits2 = repo
+        .git(&["rev-list", "--count", "HEAD"])
+        .trim()
+        .to_string();
+    assert_eq!(commits2, commits, "no extra commits after restart");
+    let log = repo.git(&["log", "--oneline", "-1"]);
+    assert!(
+        log.contains("project add: ops -> OPS"),
+        "commit message: {log}"
+    );
+}

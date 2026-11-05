@@ -400,7 +400,17 @@ fn api_write_create_project(
         email: format!("{actor_id}@tissue.local"),
     };
     match tissue_core::projects::Projects::new(grepo).add(name, prefix, &author) {
-        Ok(()) => respond_json(stream, 201, "{\"created\":true}"),
+        // #175: return the created project so the GUI can select it without
+        // a re-read race.
+        Ok(()) => respond_json(
+            stream,
+            201,
+            &format!(
+                "{{\"created\":true,\"project\":{{\"name\":{},\"prefix\":{},\"default\":false}}}}",
+                json_str(name),
+                json_str(prefix)
+            ),
+        ),
         // Conflicts (duplicate prefix, name remap, invalid input) are 409s
         // for existing state, 400s for bad input — both clean JSON.
         Err(

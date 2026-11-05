@@ -26,6 +26,14 @@
  * can never inject HTML (acceptance criterion 3, AGENTS.md §5).
  */
 const NEEDS_REVIEW = "needs-review";
+/** #175: the authoritative project list — GET /api/projects (the config
+ * mapping), NOT issue-id prefixes: a project with zero issues must still
+ * appear in the switcher, and a created project must survive reload. */
+async function loadProjects() {
+    var _a;
+    const data = await fetchJson("/api/projects");
+    return (_a = data.projects) !== null && _a !== void 0 ? _a : [];
+}
 /** API token, sessionStorage only — never persisted server-side (#98 AC5). */
 const TOKEN_KEY = "tissue-api-token";
 function getToken() {
@@ -142,19 +150,29 @@ function knownProjects(issues) {
     }
     return [...set].sort();
 }
-/** Populate the project switcher from the issue data. */
-function populateProjectSelect(issues) {
+/** Populate the project switcher from GET /api/projects (#175: the config
+ * mapping is authoritative — a project with no issues yet still shows). */
+async function populateProjectSelect(issues) {
     const select = document.getElementById("project-select");
     if (!select)
         return;
     const current = select.value;
-    const projects = knownProjects(issues);
+    let prefixes;
+    try {
+        prefixes = (await loadProjects()).map((p) => p.prefix);
+    }
+    catch (_a) {
+        // Fallback if the read fails: derive from issue ids (pre-#175 behavior).
+        prefixes = knownProjects(issues);
+    }
+    // Union with issue-derived prefixes so ad-hoc prefixes still filter.
+    prefixes = [...new Set([...prefixes, ...knownProjects(issues)])].sort();
     // Rebuild options: "All projects" + one per prefix.
     select.innerHTML =
         `<option value="">All projects</option>` +
-            projects.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("");
+            prefixes.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("");
     // Keep the previous selection if still valid (e.g. hash links).
-    if (projects.includes(current))
+    if (prefixes.includes(current))
         select.value = current;
 }
 /** #135: "+ New project" — create a project via POST /api/projects
@@ -205,21 +223,12 @@ function bindNewProject() {
             form.hidden = true;
             nameEl.value = "";
             prefixEl.value = "";
-            // Repopulate the switcher and select the new project.
+            // #175: repopulate the switcher from GET /api/projects (the persisted
+            // config mapping, not issue prefixes) and select the new project.
             await loadIssues();
             const select = document.getElementById("project-select");
-            if (select) {
-                const opt = Array.from(select.options).find((o) => o.value === prefix);
-                if (opt)
-                    select.value = prefix;
-                else {
-                    const o = document.createElement("option");
-                    o.value = prefix;
-                    o.textContent = prefix;
-                    select.add(o);
-                    select.value = prefix;
-                }
-            }
+            if (select)
+                select.value = prefix;
         }
         catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
@@ -1008,7 +1017,7 @@ async function loadIssues() {
     try {
         const data = await fetchJson("/api/issues");
         allIssues = [...data.issues].sort((a, b) => issueNumber(a.id) - issueNumber(b.id));
-        populateProjectSelect(allIssues);
+        void populateProjectSelect(allIssues);
     }
     catch (e) {
         const el = app();
