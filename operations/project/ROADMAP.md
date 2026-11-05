@@ -26,16 +26,19 @@ Principle: **simple before featured.** Every stage must work end-to-end before t
 - v0.1.6: token lifecycle hash-only (#159), token visibility settings-only (#174), deploy EROFS guard (#167), HTTP agent mode (#169, decision 13), fixtures (#171), design pass (#168), docs (#147/#190)
 - v0.1.7: third-party security review fixes — actor bound to token label (#192), pre-auth body cap (#193), serve concurrency + mutation lock (#194), tag YAML safety (#195), generic API errors (#196) — plus smoke fixes #189/#199/#201/#202/#206/#210 and CI #141. Review archived in `operations/project/reviews/`.
 
-## Now — v0.1.8: owner-facing fixes before extensive testing
+## Done — v0.1.8 ✓ (2026-11-05)
 
-Owner ruling 2026-11-05: v0.1.7 runs; the next release must carry the pending fixes before the extensive smoke pass.
+Owner ruling 2026-11-05: v0.1.7 runs; the next release must carry the pending fixes before the extensive smoke pass. Landed on main (all Tester-PASS, PO-approved, FF):
 
-- **#219 + #220** settings page: sections (Agent / API tokens / About) + Mistral agent note/tooltip — PRs open, CI green, awaiting Tester
-- **#221** sidebar project dropdown must list all configured projects (config-authoritative, not issue-derived)
-- **#211** issue types + workflow: `type: feature|task|bug`, `parent:` links, status `open→in-progress→review→done|rejected` (decision 15) — Dev 2 claimed
-- **#212** search: CLI flag + `GET /api/issues?q=` + GUI filters
-- **#213** man pages (clap_mangen, build-generated, shipped in tarballs)
-- Gate: all PRs Tester-PASS → merge → bump 0.1.8 → tag → owner extensive smoke (#140 checklist)
+- #200/#205 settings sections + Mistral agent note, #213 man pages, #221 sidebar dropdown, #226 gh preflight — merged earlier
+- **#211** issue types + workflow — merged via #225 + the cli.rs fix #231 (the #225 red merge incident → AGENTS.md §7 + #149)
+- **#212** search (CLI `--search` + `GET /api/issues?q=` + GUI filters) — PR #229
+- **#228** dev-session process-runaway safeguards (procwatch + guarded test harness + gc.auto=0) — PR #230, the sandbox zombie incident fix
+- **#233** CI hardening (tools tests, --locked, offline YAML lint, systemd verify) — PR #237
+- **#238** repo rules + role skill files (poll mode §8, sandbox hygiene §9) — PO commits `234ee3a`/`232f318`
+- Tagged **v0.1.8**. Next: owner extensive smoke (#140 checklist), then the dioxus trial.
+
+## Now — owner smoke of v0.1.8 (#140 checklist)
 
 ## Next — v0.1.6-dioxus UI trial (#188)
 
