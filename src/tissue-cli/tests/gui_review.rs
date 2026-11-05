@@ -444,3 +444,57 @@ fn projects_api_create_persists_across_restart() {
         "commit message: {log}"
     );
 }
+
+/// #170: the issue detail ships a Human/AI tab split — the served GUI
+/// carries the tab markup + `/ai` route, and every data path the AI tab
+/// uses (issue, records, proposals) stays a tokenless loopback read.
+#[test]
+fn issue_detail_ai_tab_ships_and_data_paths_read() {
+    let repo = Scratch::new("ai-tab");
+    let out = repo.tissue(&["create", "IAM-1", "Tabbed issue", "--body", "hello"]);
+    assert!(out.status.success(), "create failed: {out:?}");
+    let out = repo.tissue(&[
+        "propose",
+        "IAM-1",
+        "--field",
+        "title",
+        "--current",
+        "Tabbed issue",
+        "--proposed",
+        "Better title",
+        "--actor",
+        "agent:e2e",
+    ]);
+    assert!(out.status.success(), "propose failed: {out:?}");
+    let server = start_server(&repo);
+    let addr = server.addr;
+
+    // The compiled GUI served to the browser has the Human/AI tabs and
+    // the #/issue/<id>/ai route.
+    let (status, js) = get(&addr, "/app.js");
+    assert!(status.contains("200"), "app.js: {status}");
+    assert!(js.contains("data-tab=\"ai\""), "AI tab shipped: {js}");
+    assert!(js.contains("/ai"), "ai route shipped: {js}");
+    let (status, css) = get(&addr, "/style.css");
+    assert!(
+        status.contains("200") && css.contains(".tabs"),
+        "tab styles shipped: {css}"
+    );
+
+    // The AI tab's data paths: all tokenless reads.
+    let (status, body) = get(&addr, "/api/issues/IAM-1");
+    assert!(
+        status.contains("200") && body.contains("Tabbed issue"),
+        "detail: {body}"
+    );
+    let (status, body) = get(&addr, "/api/issues/IAM-1/records");
+    assert!(
+        status.contains("200") && body.contains("proposal"),
+        "records: {body}"
+    );
+    let (status, body) = get(&addr, "/api/issues/IAM-1/proposals");
+    assert!(
+        status.contains("200") && body.contains("Better title"),
+        "proposals: {body}"
+    );
+}

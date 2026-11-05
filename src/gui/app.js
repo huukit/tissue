@@ -1064,7 +1064,49 @@ function wireEditForm(issue) {
         }
     });
 }
-async function renderDetail(id) {
+/** #170: a pending proposal rendered inside the issue's AI tab — same
+ * diff + approve/reject actions as the queue card, minus the issue link
+ * (we are already on that issue). */
+function proposalCardDetailHtml(p) {
+    var _a, _b;
+    return `<li class="proposal-card" id="proposal-${esc(p.proposal_id)}">
+    <div class="proposal-head">
+      <span class="proposal-id">${esc(p.proposal_id)}</span>
+      <span class="proposal-field">field: <code>${esc(p.field)}</code></span>
+      <span class="rec-ts">${esc(p.ts)}</span>
+    </div>
+    <div class="proposal-diff">
+      <div class="diff-row"><span class="diff-label">current</span> <code>${esc(p.current)}</code></div>
+      <div class="diff-row"><span class="diff-label">proposed</span> <code class="proposed">${esc(p.proposed)}</code></div>
+    </div>
+    ${p.rationale ? `<p class="proposal-rationale">${esc(p.rationale)}</p>` : ""}
+    <div class="proposal-actions">
+      <button class="btn btn-approve" data-issue="${esc((_a = p.issue_id) !== null && _a !== void 0 ? _a : "")}"
+        data-proposal="${esc(p.proposal_id)}">Approve</button>
+      <button class="btn btn-reject" data-issue="${esc((_b = p.issue_id) !== null && _b !== void 0 ? _b : "")}"
+        data-proposal="${esc(p.proposal_id)}">Reject…</button>
+      <span class="proposal-result" data-result-for="${esc(p.proposal_id)}"></span>
+    </div>
+  </li>`;
+}
+/** Tab bar for the issue detail's Human/AI split (#170). */
+function bindDetailTabs(id, active) {
+    document.querySelectorAll(".tab").forEach((b) => {
+        b.addEventListener("click", () => {
+            const t = b.dataset.tab;
+            if (t === active)
+                return;
+            window.location.hash =
+                t === "ai"
+                    ? `#/issue/${encodeURIComponent(id)}/ai`
+                    : `#/issue/${encodeURIComponent(id)}`;
+        });
+    });
+}
+/** #170: issue detail with a Human / AI tab split — the human format
+ * (front matter + body, editable) on one side, the agent stream,
+ * proposals, and last-touch state on the other. */
+async function renderDetail(id, tab = "human") {
     var _a;
     const el = app();
     if (!el)
@@ -1084,47 +1126,82 @@ async function renderDetail(id) {
         ]
             .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
             .join("");
-        // Agent-stream timeline (#98 AC4): all record types, collapsed by
-        // default — heavy agent activity must not break readability (#3).
-        let timeline = "";
+        // AI side (#170): pending proposals + the agent stream (#98 AC4, all
+        // record types, collapsed by default — heavy agent activity must not
+        // break readability, #3).
+        let proposals = [];
         try {
-            const records = await fetchJson(`/api/issues/${encodeURIComponent(id)}/records`);
-            if (records.length > 0) {
-                const rows = records
-                    .map((r) => {
-                    var _a;
-                    return `<details class="timeline-record">
-            <summary>
-              <span class="rec-type">${esc(String((_a = r.data.type) !== null && _a !== void 0 ? _a : "?"))}</span>
-              <span class="rec-actor">${esc(r.actor)}</span>
-              <span class="rec-ts">${esc(r.ts)}</span>
-            </summary>
-            <pre class="rec-data">${esc(JSON.stringify(r.data, null, 2))}</pre>
-          </details>`;
-                })
-                    .join("");
-                timeline = `
-        <section class="timeline">
-          <h3>Agent stream (${records.length} record${records.length === 1 ? "" : "s"}, collapsed)</h3>
-          ${rows}
-        </section>`;
-            }
+            proposals = await fetchJson(`/api/issues/${encodeURIComponent(id)}/proposals`);
         }
         catch (_b) {
-            // no stream or unreadable: the timeline section is simply omitted
+            // unreadable stream: the proposals section says so below
         }
+        let records = [];
+        try {
+            records = await fetchJson(`/api/issues/${encodeURIComponent(id)}/records`);
+        }
+        catch (_c) {
+            // no stream or unreadable: the timeline section says so below
+        }
+        const timelineRows = records
+            .map((r) => {
+            var _a;
+            return `<details class="timeline-record">
+        <summary>
+          <span class="rec-type">${esc(String((_a = r.data.type) !== null && _a !== void 0 ? _a : "?"))}</span>
+          <span class="rec-actor">${esc(r.actor)}</span>
+          <span class="rec-ts">${esc(r.ts)}</span>
+        </summary>
+        <pre class="rec-data">${esc(JSON.stringify(r.data, null, 2))}</pre>
+      </details>`;
+        })
+            .join("");
+        const timeline = `
+      <section class="timeline">
+        <h3>Agent stream (${records.length} record${records.length === 1 ? "" : "s"}, collapsed)</h3>
+        ${records.length > 0 ? timelineRows : `<p class="placeholder">No agent records yet.</p>`}
+      </section>`;
+        const proposalsHtml = `
+      <section class="proposals">
+        <h3>Proposals (${proposals.length} pending)</h3>
+        ${proposals.length > 0
+            ? `<ul class="proposal-list">${proposals
+                .map((p) => proposalCardDetailHtml(Object.assign(Object.assign({}, p), { issue_id: id })))
+                .join("")}</ul>`
+            : `<p class="placeholder">No pending proposals. <a class="issue-link" href="#/review">Open the review queue</a></p>`}
+      </section>`;
+        const aiPane = `
+      <dl class="front-matter">
+        <dt>last touch</dt><dd>${lastTouchBadge(issue)}</dd>
+        ${issue.tags.includes(NEEDS_REVIEW)
+            ? `<dt>review</dt><dd><a class="issue-link" href="#/review">needs-review — open the queue</a></dd>`
+            : ""}
+      </dl>
+      ${proposalsHtml}
+      ${timeline}`;
+        const humanPane = `
+      <dl class="front-matter">${fm}</dl>
+      ${editFormHtml(issue)}
+      <div class="body">${renderMarkdown(issue.body)}</div>`;
         el.innerHTML = `
       <a class="back-link" href="#/issues">&larr; All issues</a>
       <article class="detail">
         <h2>${esc(issue.id)} — ${esc(issue.title)} ${badgeHtml(issue.tags)}</h2>
         ${tokenBarHtml()}
-        <dl class="front-matter">${fm}</dl>
-        ${editFormHtml(issue)}
-        <div class="body">${renderMarkdown(issue.body)}</div>
-        ${timeline}
+        <div class="tabs" role="tablist">
+          <button class="tab${tab === "human" ? " active" : ""}" data-tab="human" role="tab">Human</button>
+          <button class="tab${tab === "ai" ? " active" : ""}" data-tab="ai" role="tab">AI${proposals.length > 0 ? ` (${proposals.length} needs review)` : ""}</button>
+        </div>
+        ${tab === "ai" ? aiPane : humanPane}
       </article>`;
         bindTokenBar();
-        wireEditForm(issue);
+        bindDetailTabs(id, tab);
+        if (tab === "ai") {
+            bindProposalActions();
+        }
+        else {
+            wireEditForm(issue);
+        }
     }
     catch (e) {
         el.innerHTML = `<p class="error">${esc(e instanceof Error ? e.message : String(e))}</p>`;
@@ -1162,10 +1239,10 @@ async function loadIssues() {
 }
 async function route() {
     const hash = window.location.hash || "#/issues";
-    const detail = /^#\/issue\/([^/]+)$/.exec(hash);
+    const detail = /^#\/issue\/([^/]+)(?:\/(ai))?$/.exec(hash);
     if (detail) {
         updateNav("");
-        await renderDetail(decodeURIComponent(detail[1]));
+        await renderDetail(decodeURIComponent(detail[1]), detail[2] === "ai" ? "ai" : "human");
         return;
     }
     const releaseDetail = /^#\/releases\/([^/]+)$/.exec(hash);
