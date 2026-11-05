@@ -88,27 +88,38 @@ jobs:
             exit 1
           fi
 
+      - name: Generate man page (#213; skipped on Windows — no man format there)
+        if: matrix.target != 'x86_64-pc-windows-msvc'
+        working-directory: src
+        run: cargo run -q --release -p tissue-cli --example gen-man -- --out "$GITHUB_WORKSPACE/man/tissue.1"
+
       - name: Package
         shell: bash
         run: |
           set -eu
-          cd "src/target/${{ matrix.target }}/release"
           case "$RUNNER_OS" in
             Windows) ext=.exe ;;
             *) ext= ;;
           esac
-          bin=tissue$ext
           # Versioned archive name (#115): tissue-v<version>-<target>.<ext>,
           # version taken from the tag (the version guard above already
           # proved tag == workspace version).
           version="${GITHUB_REF_NAME#v}"
           archive="tissue-v${version}-${{ matrix.target }}${{ matrix.ext }}"
+          stage="$(mktemp -d)"
+          cp "src/target/${{ matrix.target }}/release/tissue$ext" "$stage/tissue$ext"
           if [ "$RUNNER_OS" = Windows ]; then
-            7z a "$archive" "$bin"
+            # #213: Windows zip ships the docs/ set (markdown) instead.
+            cp -r "$GITHUB_WORKSPACE/docs" "$stage/docs"
+            (cd "$stage" && 7z a "$GITHUB_WORKSPACE/$archive" "tissue$ext" docs)
           else
-            tar czf "$archive" "$bin"
+            # #213: linux + macOS tarballs carry the generated man page at
+            # share/man/man1/tissue.1 (install with `man tissue`).
+            mkdir -p "$stage/share/man/man1"
+            cp "$GITHUB_WORKSPACE/man/tissue.1" "$stage/share/man/man1/tissue.1"
+            (cd "$stage" && tar czf "$GITHUB_WORKSPACE/$archive" "tissue$ext" share)
           fi
-          sha256sum "$archive" > "$archive.sha256"
+          (cd "$GITHUB_WORKSPACE" && sha256sum "$archive" > "$archive.sha256")
           # Surface the name for the publish job's artifact glob and logs.
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
         id: package
@@ -116,8 +127,8 @@ jobs:
         with:
           name: ${{ steps.package.outputs.archive }}
           path: |
-            src/target/${{ matrix.target }}/release/${{ steps.package.outputs.archive }}
-            src/target/${{ matrix.target }}/release/${{ steps.package.outputs.archive }}.sha256
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.archive }}.sha256
           if-no-files-found: error
 
   publish:

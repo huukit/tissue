@@ -84,7 +84,12 @@ This is the only document you need for one-time setup.
    curl -fsSL -o "/tmp/$asset.sha256" \
      "https://github.com/huukit/tissue/releases/latest/download/$asset.sha256"
    cd /tmp && sha256sum -c "$asset.sha256"
-   tar xzf "$asset" && install -m 0755 -o tissue -g tissue tissue /opt/tissue/bin/tissue
+   tar xzf "$asset"
+   install -m 0755 -o tissue -g tissue tissue /opt/tissue/bin/tissue
+   # #213: install the man page too (the auto-upgrade script only swaps the
+   # binary, so this is a one-time step; `man tissue` then works)
+   install -d /usr/local/share/man/man1
+   install -m 0644 share/man/man1/tissue.1 /usr/local/share/man/man1/tissue.1
    ```
 
 6. **Let the upgrade user control the viewer service.** The upgrade runs as
@@ -200,6 +205,16 @@ cp -f /opt/tissue/bin/tissue.previous /opt/tissue/bin/tissue && systemctl restar
 
 To roll back the service-user change (#132): remove the `User=`/`Group=`
 lines from both units, `systemctl daemon-reload`, and restart.
+
+## Uninstall
+
+```sh
+systemctl disable --now tissue.service tissue-upgrade.timer
+rm -f /etc/systemd/system/tissue.service /etc/systemd/system/tissue-upgrade.service /etc/systemd/system/tissue-upgrade.timer
+rm -rf /opt/tissue /srv/tissue-issues /usr/local/lib/tissue
+rm -f /usr/local/bin/tissue /usr/local/share/man/man1/tissue.1   # #213 man page
+systemctl daemon-reload
+```
 
 ## Safety properties
 

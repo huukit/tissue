@@ -73,8 +73,10 @@ toolchain, no node, no server dependencies.
    tag still marked draft): static
    Linux x86_64 (`*-unknown-linux-musl`), Windows x86_64
    (`*-pc-windows-msvc`), or macOS aarch64 (`*-aarch64-apple-darwin`).
-   Each artifact has a `.sha256` sidecar. Or build from source:
-   `cd src && cargo build --release`
+   Each artifact has a `.sha256` sidecar; the Linux/macOS tarballs also
+   carry the man page at `share/man/man1/tissue.1` (`man tissue` once
+   installed, #213), and the Windows zip ships the `docs/` set. Or build
+   from source: `cd src && cargo build --release`
 2. **Bootstrap a project** — `tissue init --from-github huukit/tissue`
    creates `tissue-issues/` with this repo's own issues imported (via `gh`;
    run `gh auth login` first), or `tissue init --remote /path/to/remote` for a

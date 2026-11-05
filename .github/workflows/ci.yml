@@ -119,6 +119,32 @@ jobs:
             exit 1
           fi
 
+  man-page:
+    name: man page up to date (#213)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+
+      - name: regenerate docs/man/tissue.1 and require no diff
+        run: |
+          cargo run -q -p tissue-cli --example gen-man
+          cd "$(git rev-parse --show-toplevel)"
+          if ! git diff --exit-code -- docs/man/; then
+            echo "::error::docs/man/tissue.1 is stale — regenerate with `cargo run -p tissue-cli --example gen-man` (from src/) and commit"
+            exit 1
+          fi
+          echo "OK: docs/man/tissue.1 matches a fresh render of the clap definition"
+
   msrv:
     name: MSRV (1.85)
     if: github.event_name == 'push'

@@ -11,6 +11,10 @@ tissue-core = { path = "../tissue-core" }
 clap = { workspace = true }
 serde_json = { workspace = true }
 
+# #213: man-page generator bin (gen-man) only — never a runtime dependency.
+[dev-dependencies]
+clap_mangen = { workspace = true }
+
 [[bin]]
 name = "tissue"
 path = "src/main.rs"

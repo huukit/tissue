@@ -1,0 +1,69 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH tissue 1  "tissue 0.1.7" 
+.SH NAME
+tissue \- Tissue command\-line interface
+.SH SYNOPSIS
+\fBtissue\fR [\fB\-\-repo\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Tissue — issue tracker for development with AI in the loop.
+.PP
+Every unit of work lives in a plain git repo as files: a human format (`issue.md`) owned by humans, and an AI format (`agent.jsonl`) owned by agents. This CLI is the local interface to both.
+.SH OPTIONS
+.TP
+\fB\-\-repo\fR \fI<DIR>\fR
+Path to the tissue repository (directory containing `.tissue/`). Defaults to the current directory
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH SUBCOMMANDS
+.TP
+tissue\-init(1)
+Initialize a tissue repository: create the `.tissue/` structure, optionally configuring a remote and importing GitHub issues (#37)
+.TP
+tissue\-create(1)
+Create a new issue
+.TP
+tissue\-list(1)
+List issues; issues awaiting a human decision are flagged `[awaiting decision]` (stored tag: `needs\-review`)
+.TP
+tissue\-show(1)
+Print one issue: front matter fields and body
+.TP
+tissue\-sync(1)
+Record a human edit in the AI stream: agents reconcile from this record onward, never from raw diffs. Run after editing issue.md
+.TP
+tissue\-propose(1)
+Propose a change to an issue\*(Aqs human format for review. Fails safe if the current value no longer matches
+.TP
+tissue\-approve(1)
+Approve a pending proposal: applies the edit and clears `needs\-review`
+.TP
+tissue\-serve(1)
+Serve the read\-only local viewer (GUI) on 127.0.0.1. Loopback\-only; no remote exposure
+.TP
+tissue\-pull(1)
+Fetch the remote and rebase onto it — never a merge commit (#110). On conflict: aborts, names the affected issue ids
+.TP
+tissue\-push(1)
+Push to the remote: fast\-forward only, or `\-\-force\-with\-lease` after a pull\-rebase (#110). Refuses anything else
+.TP
+tissue\-reject(1)
+Reject a pending proposal: records the reason so agents can learn from it, and clears `needs\-review`
+.TP
+tissue\-release(1)
+Release subcommands: create / list / show / assign / cut
+.TP
+tissue\-project(1)
+Project subcommands: add / list / remove (#119)
+.TP
+tissue\-token(1)
+API token subcommands: issue / list / revoke (#159). Secrets are stored as SHA\-256 hashes only — the plaintext is printed once
+.TP
+tissue\-help(1)
+Print this message or the help of the given subcommand(s)
+.SH VERSION
+v0.1.7

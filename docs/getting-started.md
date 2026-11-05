@@ -33,6 +33,19 @@ Unpack it and put the `tissue` binary (`tissue.exe` on Windows) on your
 `PATH`. The Linux build is fully static (musl) — no runtime
 dependencies; the others need only their platform's standard runtime.
 
+The Linux and macOS tarballs also carry the man page generated from the CLI
+definition at `share/man/man1/tissue.1` (#213) — install it and use
+`man tissue`:
+
+```sh
+sudo install -d /usr/local/share/man/man1
+sudo install -m 0644 share/man/man1/tissue.1 /usr/local/share/man/man1/tissue.1
+man tissue    # or straight from the unpacked tarball: MANPATH=$PWD/share/man man tissue
+```
+
+(Windows has no man format — the zip ships the `docs/` markdown set
+instead; `tissue.exe --help` covers the CLI there.)
+
 **Build from source** instead (requires Rust and `git` on `PATH`):
 
 ```sh
@@ -192,5 +205,6 @@ record level; this covers the history level.
 - [Workflow](workflow.md) — the dual-format model and the daily loop
 - [Agent workflow](agent-workflow.md) — operating the repo as an agent via CLI only
 - [CLI reference](cli-reference.md) — every command and flag
+- [Man page](man/tissue.1) — `tissue(1)`, generated from the clap definition (#213)
 - [Container guide](container.md) — run the viewer in Docker
 - [Automated deployment](../deploy/README.md) — systemd service + auto-upgrade for a testing machine
