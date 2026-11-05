@@ -11,7 +11,9 @@
  * Stage 1 (#96): app shell with sidebar navigation
  * (Issues / Awaiting Decision / Releases), a project switcher derived from
  * issue-ID prefixes (honoring serve's --project filter when the server
- * already scopes the data), status filtering, and search by id/title.
+ * already scopes the data), status filtering, and search — #212: the search
+ * box queries GET /api/issues?q= so id/title/body/tags/type/status all
+ * match; the list toolbar carries #211's status/type filter selects.
  * Releases and Awaiting Decision render placeholder views in this stage.
  *
  * Stage 4 (#99): human editing + sync — the first mutating controls.
@@ -429,17 +431,19 @@ function applyFilters(issues: IssueSummary[]): IssueSummary[] {
   return out;
 }
 
-function searchMatches(issue: IssueSummary, q: string): boolean {
-  if (!q) return true;
-  const needle = q.toLowerCase();
-  return (
-    issue.id.toLowerCase().includes(needle) ||
-    issue.title.toLowerCase().includes(needle)
-  );
+function renderRows(issues: IssueSummary[]): void {
+  const list = document.getElementById("issue-list");
+  if (!list) return;
+  const visible = applyFilters(issues);
+  list.innerHTML =
+    visible.length > 0
+      ? visible.map(rowHtml).join("")
+      : `<li class="empty-row">No matching issues.</li>`;
 }
 
 function searchInputHtml(): string {
-  return `<input type="search" id="search" class="search" placeholder="Search id or title…" aria-label="Search issues">`;
+  // #212: searches id/title/body/tags/status server-side (GET /api/issues?q=).
+  return `<input type="search" id="search" class="search" placeholder="Search id, title, body, tags, status…" aria-label="Search issues">`;
 }
 
 /** #211: type/status filter selects for the list toolbar (hash params). */
@@ -475,19 +479,30 @@ function bindFilters(): void {
   }
 }
 
+/** #212: search goes through the API (`?q=`) so body/tags/status are covered
+ * by the same matcher as the CLI — not a client-side id/title-only filter. */
 function bindSearch(): void {
   const input = document.getElementById("search") as HTMLInputElement | null;
   if (!input) return;
   input.addEventListener("input", () => {
-    const q = input.value;
-    const visible = applyFilters(allIssues).filter((i) => searchMatches(i, q));
-    const list = document.getElementById("issue-list");
-    if (list) {
-      list.innerHTML =
-        visible.length > 0
-          ? visible.map(rowHtml).join("")
-          : `<li class="empty-row">No matching issues.</li>`;
+    const q = input.value.trim();
+    if (!q) {
+      renderRows(allIssues);
+      return;
     }
+    void (async () => {
+      try {
+        const data = await fetchJson<{ issues: IssueSummary[] }>(
+          `/api/issues?q=${encodeURIComponent(q)}`
+        );
+        renderRows(data.issues ?? []);
+      } catch (e) {
+        const list = document.getElementById("issue-list");
+        if (list) {
+          list.innerHTML = `<li class="empty-row">Search failed: ${esc(e instanceof Error ? e.message : String(e))}</li>`;
+        }
+      }
+    })();
   });
 }
 

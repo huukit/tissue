@@ -267,18 +267,16 @@ fn handle(
             return respond_json(&mut stream, 400, "{\"error\":\"truncated request body\"}");
         }
     }
+    let query = target.split_once('?').map(|(_, q)| q.to_string());
     let path = target.split('?').next().unwrap_or("/").to_string();
 
     if let Some(rest) = path.strip_prefix("/api/") {
-        return api_route(
-            &mut stream,
-            &method,
-            rest,
-            repo,
-            &headers,
-            &body,
+        // #212: ?q= search on reads, scoped like the serve-level --project.
+        let scope = ReadScope {
             project_prefix,
-        );
+            search: query.as_deref().and_then(|q| query_param(q, "q")),
+        };
+        return api_route(&mut stream, &method, rest, repo, &headers, &body, &scope);
     }
 
     // Outside /api the viewer stays read-only: GET only (405 with JSON error).
@@ -297,6 +295,52 @@ fn handle(
 // API
 // ---------------------------------------------------------------------------
 
+/// #212: read-scoping params for /api GET routes — the serve-level
+/// `--project` filter plus the `?q=` search query (parsed per request).
+struct ReadScope<'a> {
+    project_prefix: Option<&'a str>,
+    search: Option<String>,
+}
+
+/// #212: minimal query-string read for /api GETs — percent-decodes values
+/// and treats '+' as space (form-style).
+fn query_param(query: &str, key: &str) -> Option<String> {
+    for pair in query.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            if k == key {
+                return Some(percent_decode(v));
+            }
+        } else if pair == key {
+            return Some(String::new());
+        }
+    }
+    None
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(h) = std::str::from_utf8(&bytes[i + 1..i + 3]) {
+                if let Ok(b) = u8::from_str_radix(h, 16) {
+                    out.push(b);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        if bytes[i] == b'+' {
+            out.push(b' ');
+        } else {
+            out.push(bytes[i]);
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn api_route(
     stream: &mut TcpStream,
     method: &str,
@@ -304,7 +348,7 @@ fn api_route(
     repo: &Path,
     headers: &str,
     body: &[u8],
-    project_prefix: Option<&str>,
+    scope: &ReadScope<'_>,
 ) -> Result<(), String> {
     let rest = rest.trim_matches('/');
     // #174: token management API — every verb is bearer-authed (the list is
@@ -342,7 +386,8 @@ fn api_route(
         return respond_json(stream, 405, "{\"error\":\"read-only viewer: GET only\"}");
     }
     if rest == "issues" {
-        return api_issues(stream, repo, project_prefix);
+        // #212: GET /api/issues?q=<query> — same matcher as the CLI.
+        return api_issues(stream, repo, scope.project_prefix, scope.search.as_deref());
     }
     if let Some(tail) = rest.strip_prefix("issues/") {
         if let Some((id, verb)) = tail.split_once('/') {
@@ -1458,8 +1503,17 @@ fn api_issues(
     stream: &mut TcpStream,
     repo: &Path,
     project_prefix: Option<&str>,
+    search: Option<&str>,
 ) -> Result<(), String> {
     let issues = scan_issues(repo, project_prefix);
+    // #212: filter with the shared core matcher so API and CLI agree.
+    let issues: Vec<_> = match search {
+        Some(q) if !q.is_empty() => issues
+            .into_iter()
+            .filter(|i| tissue_core::human::matches_query(i, q))
+            .collect(),
+        _ => issues,
+    };
     let grepo = tissue_core::git::Repo::open(repo).ok();
     let items: Vec<String> = issues
         .iter()

@@ -408,6 +408,38 @@ pub struct IssueFile {
     front: FrontMatter,
 }
 
+/// #212: the one shared search matcher — case-insensitive substring over id,
+/// title, body, tags, type, parent, status, and release. Used by the CLI
+/// (`list --search`) and the API (`GET /api/issues?q=`) so results can never
+/// drift.
+pub fn matches_query(issue: &IssueFile, q: &str) -> bool {
+    let needle = q.to_lowercase();
+    if needle.is_empty() {
+        return true;
+    }
+    issue.id.to_lowercase().contains(&needle)
+        || issue.title.to_lowercase().contains(&needle)
+        || issue.body.to_lowercase().contains(&needle)
+        || issue.issue_type.as_str().contains(&needle)
+        || issue
+            .parent
+            .as_deref()
+            .unwrap_or("")
+            .to_lowercase()
+            .contains(&needle)
+        || issue.status.as_str().contains(&needle)
+        || issue
+            .tags
+            .iter()
+            .any(|t| t.to_lowercase().contains(&needle))
+        || issue
+            .release
+            .as_deref()
+            .unwrap_or("")
+            .to_lowercase()
+            .contains(&needle)
+}
+
 /// Valid issue id pattern: `[A-Z]+-\d+` (also blocks path traversal by construction).
 pub fn valid_issue_id(id: &str) -> bool {
     let bytes = id.as_bytes();
@@ -855,6 +887,34 @@ mod tests {
     fn issue_round_trip_is_byte_identical_when_unchanged() {
         let file = IssueFile::parse(ISSUE).unwrap();
         assert_eq!(file.serialize(), ISSUE);
+    }
+
+    #[test]
+    fn matches_query_covers_id_title_body_tags_status_release_212() {
+        let file = IssueFile::parse(ISSUE).unwrap();
+        for q in [
+            "iam-42",        // id, case-insensitive
+            "SYNC FAILS",    // title
+            "human-written", // body only
+            "needs-review",  // tag
+            "OPEN",          // status, case-insensitive
+            "v1.2.0",        // release
+            "",              // empty query matches everything
+        ] {
+            assert!(matches_query(&file, q), "query {q:?} should match");
+        }
+        for q in ["nonexistent", "closed", "v9.9.9", "draft"] {
+            assert!(!matches_query(&file, q), "query {q:?} should not match");
+        }
+        // Unicode case folding.
+        let uni = IssueFile::parse(
+            "---\nid: IAM-7\ntitle: Café unicode\nstatus: open\ncreated: 2026-10-08T09:00:00Z\nupdated: 2026-10-08T09:00:00Z\n---\n\nBody\n",
+        )
+        .unwrap();
+        assert!(
+            matches_query(&uni, "CAFÉ"),
+            "unicode case-insensitive: café"
+        );
     }
 
     #[test]

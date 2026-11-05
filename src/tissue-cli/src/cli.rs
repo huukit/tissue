@@ -98,6 +98,11 @@ pub enum Commands {
         /// Explicitly list every issue in the repo, all projects.
         #[arg(long)]
         all: bool,
+        /// Case-insensitive substring search over id, title, body, tags,
+        /// type, parent, status, release (#212); combinable with
+        /// --status/--type/--project.
+        #[arg(long, value_name = "QUERY")]
+        search: Option<String>,
     },
     /// Print one issue: front matter fields and body.
     Show {

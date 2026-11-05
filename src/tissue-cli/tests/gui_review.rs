@@ -993,3 +993,137 @@ fn gui_ships_types_and_workflow_211() {
         assert!(css.contains(needle), "style.css has {needle}");
     }
 }
+
+/// #212: search is one shared matcher — CLI `list --search <q>` and
+/// `GET /api/issues?q=<q>` return identical id sets, covering id, title,
+/// body, tags, type, status — case-insensitively, unicode included.
+/// Combinable with --status/--project on the CLI. The served GUI searches
+/// via the API (`/api/issues?q=`); toolbar dropdowns are #211's hash-param
+/// selects (filter-type / filter-status).
+#[test]
+fn search_cli_and_api_agree_212() {
+    let repo = Scratch::new("search-212");
+    assert!(repo
+        .tissue(&["project", "add", "ops", "OPS"])
+        .status
+        .success());
+    assert!(repo
+        .tissue(&[
+            "create",
+            "IAM-1",
+            "Fix login bug",
+            "--body",
+            "session cookie dropped"
+        ])
+        .status
+        .success());
+    assert!(repo
+        .tissue(&[
+            "create",
+            "IAM-2",
+            "Café menu polish",
+            "--type",
+            "bug",
+            "--body",
+            "unicode ü body"
+        ])
+        .status
+        .success());
+    assert!(repo
+        .tissue(&[
+            "create",
+            "OPS-1",
+            "deploy notes",
+            "--project",
+            "ops",
+            "--body",
+            "systemd unit"
+        ])
+        .status
+        .success());
+    // Tag on IAM-1 via the human format (serve/CLI both read the working tree).
+    let p = repo.root.join(".tissue/issues/IAM-1/issue.md");
+    let md = std::fs::read_to_string(&p).unwrap();
+    std::fs::write(&p, md.replace("tags: []", "tags: [urgent]")).unwrap();
+
+    let server = start_server(&repo);
+    let addr = server.addr;
+
+    let cli_ids = |q: &str| -> Vec<String> {
+        let out = repo.tissue(&["list", "--search", q]);
+        assert!(out.status.success(), "list --search {q}: {out:?}");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| l.split_whitespace().next().map(|s| s.to_string()))
+            .filter(|t| t.contains('-'))
+            .collect()
+    };
+    let api_ids = |path: &str| -> Vec<String> {
+        let (status, body) = get(&addr, path);
+        assert!(status.contains("200"), "{path}: {status} {body}");
+        let mut ids = Vec::new();
+        let mut rest = body.as_str();
+        while let Some(i) = rest.find("\"id\":\"") {
+            rest = &rest[i + 6..];
+            let end = rest.find('"').unwrap();
+            ids.push(rest[..end].to_string());
+            rest = &rest[end..];
+        }
+        ids.sort();
+        ids
+    };
+
+    // (query, cli arg, url-encoded api path, expected ids)
+    let cases: &[(&str, &str, &str, &[&str])] = &[
+        ("login", "login", "login", &["IAM-1"]),
+        ("cookie", "cookie", "cookie", &["IAM-1"]), // body-only match
+        ("urgent", "urgent", "urgent", &["IAM-1"]), // tag match
+        ("bug", "bug", "bug", &["IAM-1", "IAM-2"]), // title match + type match
+        ("feature", "feature", "feature", &[]), // no feature in this scratch repo
+        ("open", "open", "open", &["IAM-1", "IAM-2", "OPS-1"]), // status match
+        ("CAFÉ", "CAFÉ", "caf%C3%A9", &["IAM-2"]),  // unicode case-insensitive
+        ("systemd", "systemd", "systemd", &["OPS-1"]),
+        ("zzz-no-match", "zzz-no-match", "zzz-no-match", &[]),
+    ];
+    for (label, cli_q, api_q, expected) in cases {
+        let mut cli = cli_ids(cli_q);
+        cli.sort();
+        let api = api_ids(&format!("/api/issues?q={api_q}"));
+        let mut exp: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
+        exp.sort();
+        assert_eq!(cli, exp, "CLI ids for {label:?}");
+        assert_eq!(api, exp, "API ids for {label:?}");
+        assert_eq!(cli, api, "CLI/API parity for {label:?}");
+    }
+
+    // Combinable with --status/--project on the CLI.
+    let out = repo.tissue(&["list", "--search", "open", "--status", "closed"]);
+    assert!(out.status.success());
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("IAM-1"),
+        "search+status combine"
+    );
+    let out = repo.tissue(&["list", "--search", "systemd", "--project", "ops"]);
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("OPS-1"), "search+project: {s}");
+    let out = repo.tissue(&["list", "--search", "bug", "--type", "feature"]);
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(!s.contains("IAM-2"), "search+type combine: {s}");
+
+    // GUI: search goes through the API query; toolbar dropdowns ship (#211).
+    let (status, js) = get(&addr, "/app.js");
+    assert!(status.contains("200"), "{status}");
+    assert!(
+        js.contains("/api/issues?q="),
+        "GUI searches via API: app.js"
+    );
+    assert!(
+        !js.contains("searchMatches"),
+        "id/title-only matcher removed"
+    );
+    assert!(
+        js.contains("filter-status"),
+        "status dropdown ships: app.js"
+    );
+    assert!(js.contains("filter-type"), "type dropdown ships: app.js");
+}

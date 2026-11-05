@@ -15,7 +15,7 @@ use clap::Parser;
 
 use tissue_cli::cli::{Cli, Commands, ProjectCommands, ReleaseCommands, TokenCommands};
 use tissue_core::git;
-use tissue_core::human::{valid_issue_id, IssueFile, IssueStatus, IssueType};
+use tissue_core::human::{matches_query, valid_issue_id, IssueFile, IssueStatus, IssueType};
 use tissue_core::releases::Releases;
 use tissue_core::state::Decision;
 use tissue_core::sync::{Actor, Core, Field, ProposalDraft};
@@ -142,12 +142,14 @@ fn run(cli: Cli) -> Result<(), String> {
             issue_type,
             project,
             all,
+            search,
         } => list(
             &repo,
             &status,
             issue_type.as_deref(),
             project.as_deref(),
             all,
+            search.as_deref(),
         ),
         Commands::Show { id } => show(&repo, &id),
         Commands::Sync { id, summary, actor } => sync_cmd(&repo, &id, &summary, &actor),
@@ -625,6 +627,7 @@ fn list(
     type_filter: Option<&str>,
     project: Option<&str>,
     all: bool,
+    search: Option<&str>,
 ) -> Result<(), String> {
     require_repo(repo)?;
     for f in status_filter {
@@ -688,6 +691,13 @@ fn list(
                                 continue;
                             }
                         }
+                        // #212: drafts have no issue.md yet — match id+title.
+                        if let Some(q) = search {
+                            let hay = format!("{name} {title}").to_lowercase();
+                            if !hay.contains(&q.to_lowercase()) {
+                                continue;
+                            }
+                        }
                         any = true;
                         println!(
                             "{name}  (pending proposal)  {title}  [ai-proposal] [awaiting decision]"
@@ -719,6 +729,12 @@ fn list(
         }
         if let Some(t) = &type_filter {
             if issue.issue_type != *t {
+                continue;
+            }
+        }
+        // #212: one shared matcher with the API (`GET /api/issues?q=`).
+        if let Some(q) = search {
+            if !matches_query(&issue, q) {
                 continue;
             }
         }
