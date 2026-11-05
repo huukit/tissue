@@ -910,6 +910,10 @@ fn api_write_route(
         }
     };
     let rest = rest.trim_matches('/');
+    // #189: probe the configured agent (no issue touched).
+    if rest == "agent/test" {
+        return api_write_agent_test(stream, repo);
+    }
     if rest == "issues" {
         return api_write_create_issue(stream, repo, &actor_id, payload);
     }
@@ -948,6 +952,59 @@ fn json_field<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> {
 
 fn parse_json_body(payload: &str) -> Result<serde_json::Value, u16> {
     serde_json::from_str(payload).map_err(|_| 400u16)
+}
+
+/// #189: POST /api/agent/test — probe the configured agent without touching
+/// any issue. Response: {ok, mode, detail, latency_ms, error?}.
+fn api_write_agent_test(stream: &mut TcpStream, repo: &Path) -> Result<(), String> {
+    match tissue_core::config::agent_config(repo) {
+        Ok(None) => respond_json(
+            stream,
+            400,
+            "{\"ok\":false,\"error\":\"no agent: block configured in .tissue/config.yml\"}",
+        ),
+        Ok(Some(agent)) => {
+            let mode = match agent.mode {
+                tissue_core::config::AgentMode::Command => "command",
+                tissue_core::config::AgentMode::Http => "http",
+            };
+            let out = tissue_core::config::test_agent(repo, &agent);
+            let ok = out.exit_code == Some(0) || out.http_status == Some(200);
+            let detail = if out.timed_out {
+                format!("timed out after {}s", agent.timeout_sec)
+            } else if let Some(code) = out.exit_code {
+                format!("exit code {code}")
+            } else if let Some(http) = out.http_status {
+                format!("HTTP {http}")
+            } else {
+                "no response".to_string()
+            };
+            let body = format!(
+                "{{\"ok\":{},\"mode\":{},\"detail\":{},\"latency_ms\":{},\"error\":{}}}",
+                if ok { "true" } else { "false" },
+                json_str(mode),
+                json_str(&detail),
+                out.duration_ms,
+                json_str(&out.stderr_tail),
+            );
+            respond_json(stream, if ok { 200 } else { 502 }, &body)
+        }
+        // #196 cross-PR finding: config-parse errors embed the absolute
+        // config path — sanitize via api_error (defined with #207's PR;
+        // inline the same redaction here so this branch is safe standalone).
+        Err(e) => {
+            let sanitized = e.replace(
+                &repo.join(".tissue/config.yml").display().to_string(),
+                "<config.yml>",
+            );
+            eprintln!("api error (400): {e}");
+            respond_json(
+                stream,
+                400,
+                &format!("{{\"error\":{}}}", json_str(&sanitized)),
+            )
+        }
+    }
 }
 
 /// POST /api/issues  {"id": "IAM-9", "title": "...", "actor": "agent:dev-1"}

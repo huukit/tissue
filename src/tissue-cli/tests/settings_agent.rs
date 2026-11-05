@@ -132,12 +132,6 @@ fn write_stub_agent(root: &std::path::Path, name: &str, extra_check: &str) -> Pa
     stub
 }
 
-#[cfg(unix)]
-fn make_executable(p: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
-}
-
 #[cfg(not(unix))]
 fn make_executable(_p: &std::path::Path) {}
 
@@ -719,4 +713,88 @@ fn v015_command_mode_config_still_works() {
     let stream = repo.agent_stream("IAM-1");
     assert!(stream.contains("\"mode\":\"command\""), "{stream}");
     assert!(stream.contains("\"exit_code\":0"), "{stream}");
+}
+
+/// #189: POST /api/agent/test probes the configured agent — command mode
+/// success, failing command, no agent configured, and no secret leakage.
+#[test]
+fn agent_test_endpoint() {
+    use std::io::Write as _;
+    // command-mode agent that succeeds on --tissue-ping
+    let repo = Scratch::new("agent-test-ok");
+    repo.set_token("tok");
+    let ping = repo.root.join("ping-agent.sh");
+    std::fs::write(
+        &ping,
+        "#!/bin/sh\n[ \"$1\" = \"--tissue-ping\" ] && exit 0\nexit 9\n",
+    )
+    .unwrap();
+    make_executable(&ping);
+    let cfg = repo.root.join(".tissue/config.yml");
+    let mut content = std::fs::read_to_string(&cfg).unwrap();
+    content.push_str(&format!(
+        "agent:\n  mode: command\n  command: {}\n  timeout_sec: 5\n",
+        ping.display()
+    ));
+    std::fs::write(&cfg, content).unwrap();
+
+    let server = start_server(&repo);
+    let addr = &server.addr;
+    let (status, body) = post(addr, "/api/agent/test", "{}", Some("tok"));
+    assert!(status.contains("200"), "ok probe: {status} {body}");
+    assert!(
+        body.contains("\"ok\":true") && body.contains("\"mode\":\"command\""),
+        "{body}"
+    );
+    assert!(
+        !body.contains(&repo.root.display().to_string()),
+        "no fs path: {body}"
+    );
+    let _ = std::io::stdout().flush();
+
+    // failing agent -> 502 with sanitized error, no path
+    let repo2 = Scratch::new("agent-test-fail");
+    repo2.set_token("tok");
+    let bad = repo2.root.join("bad-agent.sh");
+    std::fs::write(&bad, "#!/bin/sh\necho boom >&2\nexit 3\n").unwrap();
+    make_executable(&bad);
+    let cfg2 = repo2.root.join(".tissue/config.yml");
+    let mut c2 = std::fs::read_to_string(&cfg2).unwrap();
+    c2.push_str(&format!(
+        "agent:\n  mode: command\n  command: {}\n  timeout_sec: 5\n",
+        bad.display()
+    ));
+    std::fs::write(&cfg2, c2).unwrap();
+    let server2 = start_server(&repo2);
+    let (status, body) = post(&server2.addr, "/api/agent/test", "{}", Some("tok"));
+    assert!(status.contains("502"), "fail probe: {status} {body}");
+    assert!(
+        body.contains("\"ok\":false") && body.contains("exit code 3"),
+        "{body}"
+    );
+    assert!(body.contains("boom"), "stderr tail shown: {body}");
+    assert!(
+        !body.contains(&repo2.root.display().to_string()),
+        "no fs path: {body}"
+    );
+
+    // no agent configured -> 400 with ok:false
+    let repo3 = Scratch::new("agent-test-none");
+    repo3.set_token("tok");
+    let server3 = start_server(&repo3);
+    let (status, body) = post(&server3.addr, "/api/agent/test", "{}", Some("tok"));
+    assert!(
+        status.contains("400") && body.contains("\"ok\":false"),
+        "{status} {body}"
+    );
+
+    // auth required
+    let (status, _) = post(&server3.addr, "/api/agent/test", "{}", None);
+    assert!(status.contains("401"), "{status}");
+}
+
+#[cfg(unix)]
+fn make_executable(p: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
 }

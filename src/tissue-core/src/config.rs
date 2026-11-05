@@ -387,6 +387,97 @@ const STDERR_TAIL_BYTES: usize = 2000;
 ///   failing or hanging agent.
 ///
 /// The envelope is `{issue, revision, changes, stream_tail}` per #137.
+/// #189: probe the configured agent without touching any issue.
+/// Command mode: run `command --tissue-ping` (args ignored) under the
+/// configured timeout. HTTP mode: POST {"kind":"ping","model":...} to the
+/// endpoint with the configured key. Never returns secret material.
+pub fn test_agent(repo_root: &Path, agent: &AgentConfig) -> AgentRunOutcome {
+    let start = Instant::now();
+    if agent.mode == AgentMode::Http {
+        let envelope = serde_json::json!({"kind": "ping", "model": agent.model});
+        let mut out = run_agent_http(repo_root, agent, "", &envelope);
+        out.duration_ms = start.elapsed().as_millis() as u64;
+        // Never leak the key or a credentialed URL in the tail.
+        if let Some(key) = load_agent_secret(repo_root, agent.api_key_ref.as_deref().unwrap_or(""))
+            .ok()
+            .flatten()
+        {
+            out.stderr_tail = out.stderr_tail.replace(&key, "<redacted>");
+        }
+        if let Some(ep) = agent.endpoint.as_deref() {
+            out.stderr_tail = out.stderr_tail.replace(ep, "<endpoint>");
+        }
+        return out;
+    }
+    // Command mode: ping arg, envelope on stdin, configured timeout.
+    let mut cmd = Command::new(&agent.command);
+    cmd.arg("--tissue-ping")
+        .current_dir(repo_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .env_clear()
+        .env(
+            "PATH",
+            std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string()),
+        )
+        .env(
+            "HOME",
+            std::env::var("HOME").unwrap_or_else(|_| "/".to_string()),
+        );
+    for (k, v) in &agent.env {
+        cmd.env(k, v);
+    }
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            if libc_setpgid(0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let ping = serde_json::json!({"kind": "ping"}).to_string();
+    match cmd.spawn() {
+        Ok(mut child) => {
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                let _ = stdin.write_all(ping.as_bytes());
+            }
+            let (status, stderr) = match wait_with_timeout(
+                &mut child,
+                Duration::from_secs(agent.timeout_sec.max(1)),
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    return AgentRunOutcome {
+                        exit_code: None,
+                        http_status: None,
+                        timed_out: false,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                        stderr_tail: cap_tail(e),
+                    }
+                }
+            };
+            AgentRunOutcome {
+                exit_code: status.and_then(|s| s.code()),
+                http_status: None,
+                timed_out: status.is_none(),
+                duration_ms: start.elapsed().as_millis() as u64,
+                stderr_tail: cap_tail(String::from_utf8_lossy(&stderr).to_string()),
+            }
+        }
+        Err(e) => AgentRunOutcome {
+            exit_code: None,
+            http_status: None,
+            timed_out: false,
+            duration_ms: start.elapsed().as_millis() as u64,
+            stderr_tail: cap_tail(format!("spawning agent: {e}")),
+        },
+    }
+}
+
 pub fn run_agent(
     repo_root: &Path,
     agent: &AgentConfig,

@@ -847,7 +847,7 @@ async function renderReleaseDetail(id) {
  * field is write-only and only ever used to print a one-time hint for
  * `.tissue/secrets.yml` / env — the API stores just the `api_key_ref`. */
 async function renderSettings() {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _o, _p;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _o, _p, _q;
     const el = app();
     if (!el)
         return;
@@ -858,6 +858,8 @@ async function renderSettings() {
       <p class="settings-note">Non-secret parts of <code>.tissue/config.yml</code>.
         The API token is never shown here — set it via <code>TISSUE_API_TOKEN</code>
         or the <code>api_token:</code> line in the repo (env var recommended).</p>
+      <button id="agent-test-btn" class="btn" type="button" title="Probe the configured agent (POST /api/agent/test)">Test connection</button>
+      <p id="agent-test-result" class="edit-result" aria-live="polite"></p>
       <label>Agent mode
         <select id="cfg-agent-mode" aria-label="Agent mode">
           <option value="none">None (sync stays record-only)</option>
@@ -950,15 +952,42 @@ async function renderSettings() {
     };
     syncModeSections();
     (_j = document.getElementById("cfg-agent-mode")) === null || _j === void 0 ? void 0 : _j.addEventListener("change", syncModeSections);
+    // #189: "Test connection" probes the configured agent via POST /api/agent/test.
+    (_k = document.getElementById("agent-test-btn")) === null || _k === void 0 ? void 0 : _k.addEventListener("click", async () => {
+        var _a, _b, _c, _d, _e;
+        const result = document.getElementById("agent-test-result");
+        if (!result)
+            return;
+        result.textContent = "Testing…";
+        result.className = "edit-result";
+        try {
+            const r = await postJson("/api/agent/test", {});
+            if (r.ok) {
+                result.textContent = `OK (${(_a = r.mode) !== null && _a !== void 0 ? _a : "?"}) — ${(_b = r.detail) !== null && _b !== void 0 ? _b : ""} in ${(_c = r.latency_ms) !== null && _c !== void 0 ? _c : "?"} ms`;
+                result.classList.add("ok");
+            }
+            else {
+                result.textContent = `Failed (${(_d = r.mode) !== null && _d !== void 0 ? _d : "?"}) — ${(_e = r.detail) !== null && _e !== void 0 ? _e : ""}${r.error ? `: ${r.error}` : ""}`;
+                result.classList.add("error-text");
+            }
+        }
+        catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            result.textContent = /401|token/i.test(msg)
+                ? "Testing failed — set the API token first (write actions need it)."
+                : `Testing failed: ${msg}`;
+            result.classList.add("error-text");
+        }
+    });
     const keyInput = document.getElementById("cfg-agent-key");
-    (_k = document.getElementById("cfg-agent-key-toggle")) === null || _k === void 0 ? void 0 : _k.addEventListener("click", (ev) => {
+    (_l = document.getElementById("cfg-agent-key-toggle")) === null || _l === void 0 ? void 0 : _l.addEventListener("click", (ev) => {
         if (!keyInput)
             return;
         const show = keyInput.type === "password";
         keyInput.type = show ? "text" : "password";
         ev.target.textContent = show ? "Hide" : "Show";
     });
-    (_l = document.getElementById("cfg-save")) === null || _l === void 0 ? void 0 : _l.addEventListener("click", async () => {
+    (_o = document.getElementById("cfg-save")) === null || _o === void 0 ? void 0 : _o.addEventListener("click", async () => {
         var _a;
         const result = document.getElementById("cfg-result");
         if (!result)
@@ -1025,7 +1054,7 @@ async function renderSettings() {
         }
     });
     await renderTokensSection();
-    (_o = document.getElementById("token-issue")) === null || _o === void 0 ? void 0 : _o.addEventListener("click", async () => {
+    (_p = document.getElementById("token-issue")) === null || _p === void 0 ? void 0 : _p.addEventListener("click", async () => {
         const result = document.getElementById("token-result");
         const labelEl = document.getElementById("token-label");
         if (!result || !labelEl)
@@ -1060,7 +1089,7 @@ async function renderSettings() {
                 : msg;
         }
     });
-    (_p = document.getElementById("token-copy")) === null || _p === void 0 ? void 0 : _p.addEventListener("click", () => {
+    (_q = document.getElementById("token-copy")) === null || _q === void 0 ? void 0 : _q.addEventListener("click", () => {
         var _a;
         const secretEl = document.getElementById("token-secret");
         if (!secretEl)
@@ -1425,7 +1454,24 @@ async function renderDetail(id, tab = "human") {
                 .join("")}</ul>`
             : `<p class="placeholder">No pending proposals. <a class="issue-link" href="#/review">Open the review queue</a></p>`}
       </section>`;
+        // #189: surface the last agent-run outcome as a visible banner on the AI
+        // tab (in addition to the stream record).
+        const lastAgentRun = [...records]
+            .reverse()
+            .find((r) => { var _a; return ((_a = r.data) === null || _a === void 0 ? void 0 : _a.type) === "agent-run"; });
+        const agentBanner = lastAgentRun
+            ? (() => {
+                var _a, _b, _c;
+                const d = lastAgentRun.data;
+                const failed = d.timed_out === true || (d.exit_code !== undefined && d.exit_code !== 0);
+                const msg = failed
+                    ? `agent run failed: ${d.timed_out === true ? `timeout after ${(_a = d.timeout_sec) !== null && _a !== void 0 ? _a : "?"}s` : `exit ${d.exit_code}`}`
+                    : `agent run ok: exit ${(_b = d.exit_code) !== null && _b !== void 0 ? _b : "?"} in ${(_c = d.duration_ms) !== null && _c !== void 0 ? _c : "?"} ms`;
+                return `<p class="agent-banner ${failed ? "error" : "ok"}">${esc(msg)}</p>`;
+            })()
+            : "";
         const aiPane = `
+      ${agentBanner}
       <dl class="front-matter">
         <dt>last touch</dt><dd>${lastTouchBadge(issue)}</dd>
         ${issue.tags.includes(NEEDS_REVIEW)

@@ -617,3 +617,9 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 
 /* Result/error lines under forms keep a stable height. */
 .edit-result { min-height: 1.2em; }
+
+/* #189: agent test result + agent-run banner on the issue AI tab */
+.edit-result.ok { color: #1a7f37; }
+.edit-result.error-text, .agent-banner.error { color: #b00020; }
+.agent-banner.ok { color: #1a7f37; }
+.agent-banner { border: 1px solid currentColor; border-radius: 4px; padding: 4px 8px; }

@@ -985,6 +985,8 @@ async function renderSettings(): Promise<void> {
       <p class="settings-note">Non-secret parts of <code>.tissue/config.yml</code>.
         The API token is never shown here — set it via <code>TISSUE_API_TOKEN</code>
         or the <code>api_token:</code> line in the repo (env var recommended).</p>
+      <button id="agent-test-btn" class="btn" type="button" title="Probe the configured agent (POST /api/agent/test)">Test connection</button>
+      <p id="agent-test-result" class="edit-result" aria-live="polite"></p>
       <label>Agent mode
         <select id="cfg-agent-mode" aria-label="Agent mode">
           <option value="none">None (sync stays record-only)</option>
@@ -1076,6 +1078,32 @@ async function renderSettings(): Promise<void> {
   };
   syncModeSections();
   document.getElementById("cfg-agent-mode")?.addEventListener("change", syncModeSections);
+  // #189: "Test connection" probes the configured agent via POST /api/agent/test.
+  document.getElementById("agent-test-btn")?.addEventListener("click", async () => {
+    const result = document.getElementById("agent-test-result");
+    if (!result) return;
+    result.textContent = "Testing…";
+    result.className = "edit-result";
+    try {
+      const r = await postJson<{ ok: boolean; mode?: string; detail?: string; latency_ms?: number; error?: string }>(
+        "/api/agent/test",
+        {}
+      );
+      if (r.ok) {
+        result.textContent = `OK (${r.mode ?? "?"}) — ${r.detail ?? ""} in ${r.latency_ms ?? "?"} ms`;
+        result.classList.add("ok");
+      } else {
+        result.textContent = `Failed (${r.mode ?? "?"}) — ${r.detail ?? ""}${r.error ? `: ${r.error}` : ""}`;
+        result.classList.add("error-text");
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      result.textContent = /401|token/i.test(msg)
+        ? "Testing failed — set the API token first (write actions need it)."
+        : `Testing failed: ${msg}`;
+      result.classList.add("error-text");
+    }
+  });
   const keyInput = document.getElementById("cfg-agent-key") as HTMLInputElement | null;
   document.getElementById("cfg-agent-key-toggle")?.addEventListener("click", (ev) => {
     if (!keyInput) return;
@@ -1556,7 +1584,23 @@ async function renderDetail(id: string, tab: "human" | "ai" = "human"): Promise<
             : `<p class="placeholder">No pending proposals. <a class="issue-link" href="#/review">Open the review queue</a></p>`
         }
       </section>`;
+    // #189: surface the last agent-run outcome as a visible banner on the AI
+    // tab (in addition to the stream record).
+    const lastAgentRun = [...records]
+      .reverse()
+      .find((r) => r.data?.type === "agent-run");
+    const agentBanner = lastAgentRun
+      ? (() => {
+          const d = lastAgentRun.data as Record<string, unknown>;
+          const failed = d.timed_out === true || (d.exit_code !== undefined && d.exit_code !== 0);
+          const msg = failed
+            ? `agent run failed: ${d.timed_out === true ? `timeout after ${d.timeout_sec ?? "?"}s` : `exit ${d.exit_code}`}`
+            : `agent run ok: exit ${d.exit_code ?? "?"} in ${d.duration_ms ?? "?"} ms`;
+          return `<p class="agent-banner ${failed ? "error" : "ok"}">${esc(msg)}</p>`;
+        })()
+      : "";
     const aiPane = `
+      ${agentBanner}
       <dl class="front-matter">
         <dt>last touch</dt><dd>${lastTouchBadge(issue)}</dd>
         ${
