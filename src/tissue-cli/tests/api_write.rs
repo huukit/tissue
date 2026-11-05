@@ -196,14 +196,24 @@ fn remote_agent_loop_end_to_end() {
     let server = start_server(&repo);
     let addr = &server.addr;
 
-    // create via API with an AGENT actor (#139): a creation proposal —
-    // no issue.md written, 201, one commit, draft in the stream.
+    // create via API with an AGENT actor (#139, #192): the actor comes from
+    // the TOKEN label, not the body — issue an agent-labeled token; the body
+    // `actor` field is ignored. Creation proposal: no issue.md, 201, one
+    // commit, draft in the stream.
+    let out = repo.tissue(&["token", "issue", "--label", "agent:dev-1"]);
+    assert!(out.status.success(), "{out:?}");
+    let agent_secret = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix("token: "))
+        .expect("agent token")
+        .trim()
+        .to_string();
     let before = repo.commit_count();
     let (status, _, body) = post(
         addr,
         "/api/issues",
-        r#"{"id":"IAM-9","title":"From the API","actor":"agent:dev-1"}"#,
-        Some("test-token-1"),
+        r#"{"id":"IAM-9","title":"From the API","actor":"human:spoofed"}"#,
+        Some(&agent_secret),
     );
     assert!(
         status.contains("201"),
@@ -251,7 +261,7 @@ fn remote_agent_loop_end_to_end() {
         addr,
         "/api/issues/IAM-9/records",
         r#"{"actor":"agent:dev-1","data":{"type":"observation","summary":"investigated","evidence":"logs"}}"#,
-        Some("test-token-1"),
+        Some(&agent_secret),
     );
     assert!(
         status.contains("201"),
@@ -268,7 +278,7 @@ fn remote_agent_loop_end_to_end() {
         addr,
         "/api/issues/IAM-9/propose",
         r#"{"field":"status","current":"open","proposed":"in-progress","rationale":"work started","actor":"agent:dev-1"}"#,
-        Some("test-token-1"),
+        Some(&agent_secret),
     );
     assert!(
         status.contains("201"),
@@ -418,7 +428,7 @@ fn env_var_token_authenticates_without_config() {
     let (status, _, body) = post(
         &server.addr,
         "/api/issues",
-        r#"{"id":"IAM-1","title":"Env created","actor":"agent:dev-1"}"#,
+        r#"{"id":"IAM-1","title":"Env created"}"#,
         Some("env-secret"),
     );
     assert!(
@@ -1177,4 +1187,82 @@ fn serve_logs_never_contain_the_token() {
         !logs.contains("super-secret-env-token"),
         "token in serve logs: {logs}"
     );
+}
+
+/// #192 regression: actor identity is bound to the token label.
+/// (a) agent token + spoofed `actor:"human:*"` in body → still agent
+///     (create = proposal, no issue.md); (b) agent token approve → 403;
+/// (c) human token + `actor:"agent:*"` in body → still human (direct).
+#[test]
+fn actor_identity_bound_to_token_label() {
+    let repo = Scratch::new("actor-binding-192");
+    repo.set_token("human-token");
+    let server = start_server(&repo);
+    let addr = &server.addr;
+
+    let out = repo.tissue(&["token", "issue", "--label", "agent:dev-1"]);
+    assert!(out.status.success(), "{out:?}");
+    let agent_secret = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix("token: "))
+        .expect("agent token")
+        .trim()
+        .to_string();
+
+    // (a) agent token + spoofed human actor in the body → still a proposal.
+    let (status, _, body) = post(
+        addr,
+        "/api/issues",
+        r#"{"id":"IAM-1","title":"spoof attempt","actor":"human:root"}"#,
+        Some(&agent_secret),
+    );
+    assert!(status.contains("201"), "{status} {body}");
+    assert!(
+        body.contains("proposed-needs-review"),
+        "agent token stays agent despite body actor: {body}"
+    );
+    assert!(
+        !repo.root.join(".tissue/issues/IAM-1/issue.md").exists(),
+        "no direct human-format write"
+    );
+
+    // (b) agent token cannot approve → 403 from the core actor-kind check.
+    let (status, _, body) = post(
+        addr,
+        "/api/issues/IAM-1/approve",
+        r#"{"proposal_id":"prop-01"}"#,
+        Some(&agent_secret),
+    );
+    assert!(
+        status.contains("403"),
+        "agent approve must 403: {status} {body}"
+    );
+    assert!(body.contains("human"), "error explains the rule: {body}");
+
+    // (c) human token + agent actor in the body → still human (direct create).
+    let (status, _, body) = post(
+        addr,
+        "/api/issues",
+        r#"{"id":"IAM-2","title":"human create","actor":"agent:fake"}"#,
+        Some("human-token"),
+    );
+    assert!(status.contains("201"), "{status} {body}");
+    assert!(
+        body.contains("\"direct\""),
+        "human token stays human: {body}"
+    );
+    assert!(repo.root.join(".tissue/issues/IAM-2/issue.md").exists());
+
+    // The human token CAN approve the agent's proposal.
+    let (status, _, body) = post(
+        addr,
+        "/api/issues/IAM-1/approve",
+        r#"{"proposal_id":"prop-01"}"#,
+        Some("human-token"),
+    );
+    assert!(
+        status.contains("201"),
+        "human approve works: {status} {body}"
+    );
+    assert!(repo.root.join(".tissue/issues/IAM-1/issue.md").exists());
 }

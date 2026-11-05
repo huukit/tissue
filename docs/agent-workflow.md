@@ -14,10 +14,14 @@ tissue token issue --label agent:<your-name>   # run once by a human; the
 # API use:  Authorization: Bearer <token>   (env: TISSUE_API_TOKEN on the serve host)
 ```
 
-Actor convention: identify yourself as `agent:<name>` on every command
-(`--actor agent:dev-1`) and in API `actor` fields. The actor id lands in
-the stream record **and** the git commit author — the audit trail depends
-on it.
+Actor convention: on the API, your actor id is derived **server-side from
+the token's label** (#192) — issue yourself a token labeled
+`agent:<name>` (`tissue token issue --label agent:dev-1`) and that label
+lands in the stream record and the git commit author. A client-supplied
+`actor` field in a request body is display-only and never drives workflow
+routing; an agent-labeled token cannot approve/reject (humans decide), and
+its creates stay proposals. On the CLI, pass `--actor agent:<name>` (the
+CLI runs as a trusted local actor).
 
 ## The four-case contract (#139)
 

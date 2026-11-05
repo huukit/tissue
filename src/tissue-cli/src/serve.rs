@@ -313,19 +313,10 @@ fn api_put_route(
             "{\"error\":\"write API disabled: no token configured (tissue token issue, or TISSUE_API_TOKEN env)\"}",
         );
     }
-    match bearer_token(headers) {
-        Some(provided) if resolve_token(repo, &provided).is_some() => {}
-        Some(_) => {
-            return respond_json(stream, 401, "{\"error\":\"invalid or revoked token\"}");
-        }
-        None => {
-            return respond_json(
-                stream,
-                401,
-                "{\"error\":\"missing Authorization: Bearer <token> header\"}",
-            );
-        }
-    }
+    // #192: same helper — actor comes from the token label, never the body.
+    let Some(actor_id) = require_bearer_actor(stream, repo, headers)? else {
+        return Ok(());
+    };
     let payload = match std::str::from_utf8(body) {
         Ok(s) => s,
         Err(_) => {
@@ -360,10 +351,7 @@ fn api_put_route(
         }
         updates.insert(k.clone(), val.clone());
     }
-    let actor_id = obj
-        .get("actor")
-        .and_then(|a| a.as_str())
-        .unwrap_or("human:gui");
+    // #192: commit actor is the token-derived actor, not a body field.
     let grepo = tissue_core::git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
     let author = tissue_core::git::Author {
         name: actor_id.to_string(),
@@ -381,6 +369,7 @@ fn api_put_route(
 fn api_write_create_project(
     stream: &mut TcpStream,
     repo: &Path,
+    actor_id: &str,
     payload: &str,
 ) -> Result<(), String> {
     let v = match parse_json_body(payload) {
@@ -398,7 +387,6 @@ fn api_write_create_project(
             "{\"error\":\"body must have string fields: name, prefix\"}",
         );
     };
-    let actor_id = json_field(&v, "actor").unwrap_or("human:gui");
     let grepo = tissue_core::git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
     let author = tissue_core::git::Author {
         name: actor_id.to_string(),
@@ -440,6 +428,7 @@ fn api_write_create_project(
 fn api_write_create_release(
     stream: &mut TcpStream,
     repo: &Path,
+    actor_id: &str,
     payload: &str,
 ) -> Result<(), String> {
     let v = match parse_json_body(payload) {
@@ -458,7 +447,6 @@ fn api_write_create_release(
         );
     };
     let body = json_field(&v, "body").unwrap_or("");
-    let actor_id = json_field(&v, "actor").unwrap_or("human:gui");
     let grepo = tissue_core::git::Repo::open(repo).map_err(|e| format!("opening git repo: {e}"))?;
     let author = tissue_core::git::Author {
         name: actor_id.to_string(),
@@ -520,20 +508,39 @@ fn token_store(repo: &Path) -> Option<tissue_core::tokens::TokenStore> {
 /// Resolve a presented bearer token to a label, or None when it matches no
 /// valid token (env override, managed hash entry, or legacy plaintext line).
 /// All comparisons are constant-time (tissue-core::tokens).
-fn resolve_token(repo: &Path, presented: &str) -> Option<String> {
+/// #192: resolve a presented bearer token to its full entry (id + label).
+fn resolve_token_entry(repo: &Path, presented: &str) -> Option<tissue_core::tokens::TokenEntry> {
     let env = env_token_override();
     if let Some(store) = token_store(repo) {
         if let Some(entry) = store.resolve(presented, env.as_deref()) {
-            return Some(entry.label);
+            return Some(entry);
         }
     }
-    // Legacy plaintext line (pre-#159 repos).
+    // Legacy plaintext line (pre-#159 repos) — operator-held, maps to human.
     if let Some(legacy) = tissue_core::tokens::legacy_plaintext_token(repo) {
         if tissue_core::tokens::constant_time_eq(&legacy, presented) {
-            return Some("api_token (legacy config line)".to_string());
+            return Some(tissue_core::tokens::TokenEntry {
+                id: "legacy".to_string(),
+                label: "human:legacy-api-token".to_string(),
+                sha256: String::new(),
+                created: String::new(),
+            });
         }
     }
     None
+}
+
+/// #192: the workflow actor id is derived SERVER-SIDE from the resolved
+/// token's label — a client-supplied `actor` field never drives workflow
+/// routing. Env/legacy tokens are operator-held and map to `human:`.
+fn actor_from_token(repo: &Path, presented: &str) -> Option<String> {
+    let entry = resolve_token_entry(repo, presented)?;
+    let label = entry.label;
+    if label.starts_with("agent:") || label.starts_with("human:") {
+        Some(label)
+    } else {
+        Some(format!("human:{}", label.replace(' ', "-")))
+    }
 }
 
 /// True when any write auth is configured at all (env override, a managed
@@ -566,28 +573,38 @@ fn bearer_token(headers: &str) -> Option<String> {
 /// is configured at all, 401 on missing/invalid/revoked. The token value is
 /// never logged or echoed. Returns Ok(true) when authed; Ok(false) when the
 /// error response was already sent (caller must stop).
-fn require_bearer(stream: &mut TcpStream, repo: &Path, headers: &str) -> Result<bool, String> {
+/// #192: authenticate the bearer token and derive the workflow actor id from
+/// the resolved token's label (server-side only). Returns Ok(Some(actor))
+/// on success; on failure the error response is already written and Ok(None)
+/// is returned.
+fn require_bearer_actor(
+    stream: &mut TcpStream,
+    repo: &Path,
+    headers: &str,
+) -> Result<Option<String>, String> {
     if !write_auth_configured(repo) {
         respond_json(
             stream,
             503,
             "{\"error\":\"write API disabled: no token configured (tissue token issue, or TISSUE_API_TOKEN env)\"}",
         )?;
-        return Ok(false);
+        return Ok(None);
     }
     match bearer_token(headers) {
-        Some(provided) if resolve_token(repo, &provided).is_some() => Ok(true),
-        Some(_) => {
-            respond_json(stream, 401, "{\"error\":\"invalid or revoked token\"}")?;
-            Ok(false)
-        }
+        Some(provided) => match actor_from_token(repo, &provided) {
+            Some(a) => Ok(Some(a)),
+            None => {
+                respond_json(stream, 401, "{\"error\":\"invalid or revoked token\"}")?;
+                Ok(None)
+            }
+        },
         None => {
             respond_json(
                 stream,
                 401,
                 "{\"error\":\"missing Authorization: Bearer <token> header\"}",
             )?;
-            Ok(false)
+            Ok(None)
         }
     }
 }
@@ -606,9 +623,9 @@ fn api_tokens_route(
     headers: &str,
     body: &[u8],
 ) -> Result<(), String> {
-    if !require_bearer(stream, repo, headers)? {
+    let Some(actor_id) = require_bearer_actor(stream, repo, headers)? else {
         return Ok(());
-    }
+    };
     let rest = rest.trim_matches('/');
     let Some(store) = token_store(repo) else {
         return respond_json(stream, 500, "{\"error\":\"opening git repo\"}");
@@ -659,7 +676,6 @@ fn api_tokens_route(
                         "{\"error\":\"body must have a string field: label\"}",
                     );
                 };
-                let actor_id = json_field(&v, "actor").unwrap_or("human:gui");
                 let author = tissue_core::git::Author {
                     name: actor_id.to_string(),
                     email: format!("{actor_id}@tissue.local"),
@@ -697,8 +713,7 @@ fn api_tokens_route(
                     return respond_json(stream, 400, "{\"error\":\"body must be UTF-8 JSON\"}")
                 }
             };
-            let v = parse_json_body(payload).unwrap_or(serde_json::Value::Null);
-            let actor_id = json_field(&v, "actor").unwrap_or("human:gui");
+            let _ = parse_json_body(payload).unwrap_or(serde_json::Value::Null);
             let author = tissue_core::git::Author {
                 name: actor_id.to_string(),
                 email: format!("{actor_id}@tissue.local"),
@@ -735,13 +750,12 @@ fn api_write_route(
     headers: &str,
     body: &[u8],
 ) -> Result<(), String> {
-    // Auth failures are explicit and never log the token (AC4). #159: the
-    // presented token resolves against the env override, the managed
-    // hash-only `tokens:` entries, or a legacy plaintext line — all with
-    // constant-time compares.
-    if !require_bearer(stream, repo, headers)? {
+    // Auth failures are explicit and never log the token (AC4). #192: the
+    // token is resolved once and the workflow actor is derived from its
+    // label server-side.
+    let Some(actor_id) = require_bearer_actor(stream, repo, headers)? else {
         return Ok(());
-    }
+    };
     let payload = match std::str::from_utf8(body) {
         Ok(s) => s,
         Err(_) => {
@@ -754,25 +768,29 @@ fn api_write_route(
     };
     let rest = rest.trim_matches('/');
     if rest == "issues" {
-        return api_write_create_issue(stream, repo, payload);
+        return api_write_create_issue(stream, repo, &actor_id, payload);
     }
     if rest == "projects" {
-        return api_write_create_project(stream, repo, payload);
+        return api_write_create_project(stream, repo, &actor_id, payload);
     }
     if rest == "releases" {
-        return api_write_create_release(stream, repo, payload);
+        return api_write_create_release(stream, repo, &actor_id, payload);
     }
     if let Some(tail) = rest.strip_prefix("issues/") {
         let Some((id, verb)) = tail.split_once('/') else {
             return respond_json(stream, 404, "{\"error\":\"unknown api route\"}");
         };
         match verb {
-            "records" => return api_write_append_record(stream, repo, id, payload),
-            "propose" => return api_write_propose(stream, repo, id, payload),
-            "approve" => return api_write_decide(stream, repo, id, payload, Decision::Approve),
-            "reject" => return api_write_decide(stream, repo, id, payload, Decision::Reject),
-            "sync" => return api_write_sync(stream, repo, id, payload),
-            "edit" => return api_write_edit(stream, repo, id, payload),
+            "records" => return api_write_append_record(stream, repo, &actor_id, id, payload),
+            "propose" => return api_write_propose(stream, repo, &actor_id, id, payload),
+            "approve" => {
+                return api_write_decide(stream, repo, &actor_id, id, payload, Decision::Approve)
+            }
+            "reject" => {
+                return api_write_decide(stream, repo, &actor_id, id, payload, Decision::Reject)
+            }
+            "sync" => return api_write_sync(stream, repo, &actor_id, id, payload),
+            "edit" => return api_write_edit(stream, repo, &actor_id, id, payload),
             _ => {
                 return respond_json(stream, 404, "{\"error\":\"unknown api route\"}");
             }
@@ -794,6 +812,7 @@ fn parse_json_body(payload: &str) -> Result<serde_json::Value, u16> {
 fn api_write_create_issue(
     stream: &mut TcpStream,
     repo: &Path,
+    actor_id: &str,
     payload: &str,
 ) -> Result<(), String> {
     let v =
@@ -812,7 +831,6 @@ fn api_write_create_issue(
             "{\"error\":\"body must have string fields: id, title, (optional) actor\"}",
         );
     };
-    let actor_id = json_field(&v, "actor").unwrap_or("agent:api");
     // #134: optional body (the GUI prefills the CLI's Summary/AC template).
     let body = json_field(&v, "body");
     // #172: optional project — same shared validation as the CLI.
@@ -841,6 +859,7 @@ fn api_write_create_issue(
 fn api_write_append_record(
     stream: &mut TcpStream,
     repo: &Path,
+    actor_id: &str,
     id: &str,
     payload: &str,
 ) -> Result<(), String> {
@@ -853,7 +872,6 @@ fn api_write_append_record(
                 "{\"error\":\"request body must be a JSON object: {\"type\",\"data\",\"actor\"}\"}",
             ),
         };
-    let actor_id = json_field(&v, "actor").unwrap_or("agent:api");
     let Some(data) = v.get("data") else {
         return respond_json(stream, 400, "{\"error\":\"body must have a data object\"}");
     };
@@ -893,6 +911,7 @@ fn api_issue_records(stream: &mut TcpStream, repo: &Path, id: &str) -> Result<()
 fn api_write_decide(
     stream: &mut TcpStream,
     repo: &Path,
+    actor_id: &str,
     id: &str,
     payload: &str,
     decision: Decision,
@@ -914,7 +933,6 @@ fn api_write_decide(
             "{\"error\":\"body must have string fields: proposal_id, (reject) reason, actor\"}",
         );
     };
-    let actor_id = json_field(&v, "actor").unwrap_or("human:gui");
     let reason = json_field(&v, "reason");
     if decision == Decision::Reject && reason.is_none() {
         return respond_json(
@@ -938,6 +956,10 @@ fn api_write_decide(
                 json_str(&commit)
             ),
         ),
+        // #192: an actor-kind refusal from core is a 403, not a 400.
+        Err(e) if e.contains("may not approve/reject") => {
+            respond_json(stream, 403, &format!("{{\"error\":{}}}", json_str(&e)))
+        }
         Err(e) => respond_json(stream, 400, &format!("{{\"error\":{}}}", json_str(&e))),
     }
 }
@@ -949,6 +971,7 @@ fn api_write_decide(
 fn api_write_propose(
     stream: &mut TcpStream,
     repo: &Path,
+    actor_id: &str,
     id: &str,
     payload: &str,
 ) -> Result<(), String> {
@@ -974,7 +997,6 @@ fn api_write_propose(
         );
     };
     let rationale = json_field(&v, "rationale").unwrap_or("");
-    let actor_id = json_field(&v, "actor").unwrap_or("agent:api");
     match crate::api_write::propose(repo, id, field, current, proposed, rationale, actor_id) {
         Ok(proposal_id) => respond_json(
             stream,
@@ -994,6 +1016,7 @@ fn api_write_propose(
 fn api_write_sync(
     stream: &mut TcpStream,
     repo: &Path,
+    actor_id: &str,
     id: &str,
     payload: &str,
 ) -> Result<(), String> {
@@ -1014,7 +1037,6 @@ fn api_write_sync(
             "{\"error\":\"body must have a string field: summary (what changed and why)\"}",
         );
     };
-    let actor_id = json_field(&v, "actor").unwrap_or("human:gui");
     match crate::api_write::sync(repo, id, summary, actor_id) {
         Ok(agent_outcome) => {
             // #137: surface the agent run outcome (if configured) so the
@@ -1062,6 +1084,7 @@ fn api_write_sync(
 fn api_write_edit(
     stream: &mut TcpStream,
     repo: &Path,
+    actor_id: &str,
     id: &str,
     payload: &str,
 ) -> Result<(), String> {
@@ -1104,7 +1127,6 @@ fn api_write_edit(
             );
         }
     }
-    let actor_id = json_field(&v, "actor").unwrap_or("human:gui");
     match crate::api_write::edit_issue(repo, id, rev, title, status, release, actor_id) {
         Ok(()) => respond_json(stream, 200, "{\"edited\":true}"),
         Err(e) => {

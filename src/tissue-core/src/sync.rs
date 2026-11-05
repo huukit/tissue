@@ -131,6 +131,16 @@ pub struct Actor {
     pub id: String,
 }
 
+impl Actor {
+    pub fn is_human(&self) -> bool {
+        self.id.starts_with("human:")
+    }
+
+    pub fn is_agent(&self) -> bool {
+        self.id.starts_with("agent:")
+    }
+}
+
 /// A proposed human-format edit, supplied by the proposing agent.
 pub struct ProposalDraft<'a> {
     pub now: &'a str,
@@ -846,6 +856,14 @@ impl Core {
         decision: Decision,
         reason: Option<&str>,
     ) -> Result<String> {
+        // #192: only humans decide — an agent must not approve/reject its
+        // own proposal. Enforced in core, not just at the route layer.
+        if !actor.is_human() {
+            return Err(Error::Proposal(format!(
+                "actor `{}` may not approve/reject proposals — only human actors decide (#192)",
+                actor.id
+            )));
+        }
         let records = self.read_stream(issue_id)?;
         let proposal = self.find_proposal(&records, proposal_id)?;
         let next = proposal.state.transition(decision).map_err(
