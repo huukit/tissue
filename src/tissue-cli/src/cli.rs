@@ -74,6 +74,13 @@ pub enum Commands {
         /// configured default project — never a hardcoded prefix (#176).
         #[arg(long, value_name = "NAME")]
         project: Option<String>,
+        /// Issue type (#211): `feature`, `task` (default), or `bug`.
+        #[arg(long = "type", value_name = "TYPE")]
+        issue_type: Option<String>,
+        /// Parent feature id (#211): must exist and be a feature; only
+        /// `task`/`bug` issues may have one.
+        #[arg(long, value_name = "ID")]
+        parent: Option<String>,
     },
     /// List issues; issues awaiting a human decision are flagged `[awaiting decision]`
     /// (stored tag: `needs-review`).
@@ -81,6 +88,9 @@ pub enum Commands {
         /// Show only issues with these statuses (open, in-progress, closed).
         #[arg(long, value_name = "STATUS")]
         status: Vec<String>,
+        /// Show only issues of this type (#211): `feature`, `task`, or `bug`.
+        #[arg(long = "type", value_name = "TYPE")]
+        issue_type: Option<String>,
         /// Show only issues of one project (name mapped to an id prefix
         /// in `.tissue/config.yml`, e.g. `iam` -> `IAM`).
         #[arg(long, value_name = "NAME", conflicts_with = "all")]
