@@ -15,6 +15,8 @@
 #   TISSUE_BIN_DIR     install dir (default: /usr/local/bin)
 #   TISSUE_ASSET       asset name pattern (default: tissue-v*-x86_64-unknown-linux-musl.tar.gz;
 #                      resolved against the release's asset list, so it is version-agnostic)
+#   TISSUE_UNIT_DIR    systemd unit dir (default: /etc/systemd/system); set to
+#                      empty to skip unit refresh (#167)
 
 set -euo pipefail
 
@@ -23,8 +25,10 @@ BIN_DIR="${TISSUE_BIN_DIR:-/usr/local/bin}"
 ASSET_PATTERN="${TISSUE_ASSET:-tissue-v*-x86_64-unknown-linux-musl.tar.gz}"
 BIN_PATH="${BIN_DIR}/tissue"
 ROLLBACK_PATH="${BIN_DIR}/tissue.previous"
+UNIT_DIR="${TISSUE_UNIT_DIR:-/etc/systemd/system}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+units_refreshed=0
 
 log() { printf 'tissue-upgrade: %s\n' "$*" >&2; }
 
@@ -133,7 +137,45 @@ mv -f "${BIN_PATH}.new" "$BIN_PATH"
 printf '%s  %s\n' "$expected_sha" "$ASSET" > "${BIN_PATH}.sha"
 log "installed ${latest_tag} (rollback copy: ${ROLLBACK_PATH})"
 
+# --- 4b. Unit-file staleness check (#167) -----------------------------------
+# The binary auto-upgrades but unit files live in /etc and do NOT — a stale
+# unit caused EROFS on the owner's box (v0.1.5: ProtectSystem=strict without
+# ReadWritePaths, because the box ran the pre-#158 unit). Compare the
+# installed units against the ones at the release tag (same GitHub repo,
+# same trust boundary) and warn loudly with the exact remediation. If the
+# script runs as root and the dir is writable, refresh in place.
+if [ -n "$UNIT_DIR" ] && [ -d "$UNIT_DIR" ]; then
+    for unit in tissue.service tissue-upgrade.service tissue-upgrade.timer; do
+        installed="$UNIT_DIR/$unit"
+        [ -f "$installed" ] || continue
+        ref="$WORK/ref-$unit"
+        if curl -fsSL --max-time 20 -o "$ref" \
+            "https://raw.githubusercontent.com/${REPO_SLUG}/${latest_tag}/deploy/$unit" 2>/dev/null; then
+            if ! cmp -s "$ref" "$installed"; then
+                if [ -w "$UNIT_DIR" ]; then
+                    install -m 0644 "$ref" "$installed"
+                    log "refreshed stale unit $installed from ${REPO_SLUG}@${latest_tag} (#167)"
+                    units_refreshed=1
+                else
+                    log "WARNING: installed $unit is STALE vs ${REPO_SLUG}@${latest_tag} (#167) — refresh with: sudo curl -fsSL 'https://raw.githubusercontent.com/${REPO_SLUG}/${latest_tag}/deploy/$unit' -o '$installed' && sudo systemctl daemon-reload"
+                fi
+            fi
+        fi
+        # Hard guard for the exact v0.1.5 failure mode: strict sandbox, no
+        # writable path -> every API/GUI write fails EROFS.
+        if [ "$unit" = "tissue.service" ] \
+            && grep -q '^ProtectSystem=strict$' "$installed" \
+            && ! grep -q '^ReadWritePaths=' "$installed"; then
+            log "WARNING: $installed has ProtectSystem=strict but no ReadWritePaths — writes will fail EROFS (#167); add ReadWritePaths=/srv/tissue-issues and daemon-reload"
+        fi
+    done
+fi
+
 # --- 5. Restart the service so the new version actually runs ----------------
+# (daemon-reload first when a unit changed on disk, #167)
+if [ "$units_refreshed" = "1" ]; then
+    systemctl daemon-reload || log "daemon-reload failed (not root?) — units take effect on next boot"
+fi
 if systemctl is-active --quiet tissue.service; then
     if ! systemctl restart tissue.service; then
         log "service restart FAILED — rollback with: systemctl stop tissue.service && cp -f ${ROLLBACK_PATH} ${BIN_PATH} && systemctl start tissue.service"

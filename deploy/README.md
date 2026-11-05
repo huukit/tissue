@@ -101,7 +101,29 @@ This is the only document you need for one-time setup.
    (The upgrade script calls plain `systemctl`; with this entry it works as
    the `tissue` user. Polkit is the alternative; pick one.)
 
-7. **Enable**:
+7. **Verify the write path under the service sandbox** (#167 — a stale unit
+   with `ProtectSystem=strict` and no `ReadWritePaths` makes every GUI/API
+   write fail with EROFS):
+
+   ```sh
+   sudo -u tissue test -w /srv/tissue-issues && echo "write path OK"
+   systemctl cat tissue.service | grep -E 'ProtectSystem|ReadWritePaths'
+   ```
+
+   **Upgrade the unit files on every release, not just the binary** (#167):
+   the auto-upgrade timer swaps `/opt/tissue/bin/tissue` but unit files live
+   in `/etc/systemd/system` and only change when you copy them. After each
+   release (or when the upgrade log prints a `STALE unit` warning):
+
+   ```sh
+   for u in tissue.service tissue-upgrade.service tissue-upgrade.timer; do
+     curl -fsSL "https://raw.githubusercontent.com/huukit/tissue/vX.Y.Z/deploy/$u" \
+       | sudo tee "/etc/systemd/system/$u" >/dev/null
+   done
+   sudo systemctl daemon-reload && sudo systemctl restart tissue.service
+   ```
+
+8. **Enable**:
 
    ```sh
    systemctl daemon-reload
@@ -144,6 +166,15 @@ journalctl -u tissue.service -n 30
 (203/EXEC after an upgrade, the earlier failure mode, is fixed: `ExecStart`
 uses literal paths only, and the upgrade script refuses to activate a binary
 that fails `--version`, rolling back instead — #128.)
+
+- **`Read-only file system (os error 30)` / EROFS on any write (GUI "+ New
+  issue", API POST)** — the installed unit has `ProtectSystem=strict` but no
+  `ReadWritePaths=` (#167): the binary auto-upgraded, the unit file didn't.
+  Check with `systemctl cat tissue.service | grep -E 'ProtectSystem|ReadWritePaths'`,
+  then refresh the unit files per step 7 above, `daemon-reload`, restart.
+  Probe the write path as the service user: `sudo -u tissue test -w /srv/tissue-issues`.
+  The upgrade script now also logs a `STALE unit` / EROFS warning when it
+  detects this mismatch.
 
 ## Rollback (one-liner)
 
