@@ -48,6 +48,8 @@ def main() -> None:
           "release JSON is fetched to a file before grep (no curl|grep -m1 EPIPE under pipefail, #130)")
     check(re.search(r"curl[^|]*\|\s*grep -m1", text) is None,
           "no curl|grep -m1 pipeline anywhere in the script")
+    check('ln -sfn "$BIN_DIR/tissue" /usr/local/bin/tissue' in text,
+          "symlinks /usr/local/bin/tissue to the timer-managed binary (replaces old root install)")
 
     # defaults must match the literal ExecStart paths in the unit (#129)
     check('TISSUE_REPO_DIR:-/srv/tissue-issues' in text and "--repo /srv/tissue-issues" in UNIT,

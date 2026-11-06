@@ -98,6 +98,11 @@ else
   rm -rf /tmp/share
   log "binary installed to $BIN_DIR/tissue"
 fi
+# Keep the CLI on PATH current: /usr/local/bin stays root-owned (#132), so a
+# root-owned symlink to the timer-managed binary — replacing any old
+# root-installed /usr/local/bin/tissue from a pre-#132 setup.
+ln -sfn "$BIN_DIR/tissue" /usr/local/bin/tissue
+log "symlinked /usr/local/bin/tissue -> $BIN_DIR/tissue (single source of truth)"
 # fall back to a system-installed tissue (e.g. old /usr/local/bin install) if
 # the download was skipped or the unit path differs
 TISSUE_BIN="$BIN_DIR/tissue"
