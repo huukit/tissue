@@ -146,6 +146,10 @@ systemctl enable --now tissue-upgrade.timer
 # --- 8. verify ----------------------------------------------------------------
 sudo -u "$SERVICE_USER" test -w "$REPO_DIR" && log "write path OK: $SERVICE_USER can write $REPO_DIR"
 systemctl is-active tissue.service
-ss -ltn | grep -q '127.0.0.1:7323' && log "viewer bound to loopback 127.0.0.1:7323" || log "WARN: 7323 not bound yet — check: journalctl -u tissue.service -n 30"
+if ss -ltn | grep -q '127.0.0.1:7323'; then
+  log "viewer bound to loopback 127.0.0.1:7323"
+else
+  log "WARN: 7323 not bound yet — check: journalctl -u tissue.service -n 30"
+fi
 log "done. View from your workstation over SSH tunnel:"
 log "  ssh -L 7323:127.0.0.1:7323 user@this-box   →   http://127.0.0.1:7323"
