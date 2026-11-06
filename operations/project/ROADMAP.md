@@ -38,17 +38,19 @@ Owner ruling 2026-11-05: v0.1.7 runs; the next release must carry the pending fi
 - **#238** repo rules + role skill files (poll mode §8, sandbox hygiene §9) — PO commits `234ee3a`/`232f318`
 - Tagged **v0.1.8**. Next: owner extensive smoke (#140 checklist), then the dioxus trial.
 
-## Now — v0.1.9: owner-reported cosmetics after deploying v0.1.8
+## Done — v0.1.9 ✓ (2026-11-06)
 
-- **#244** issue detail view unclear — restructure for at-a-glance reading; owner follow-ups from the fixture GUI: label the Human (issue.md) / AI (agent.jsonl) split unmistakably, rename "Edit front matter" → "Edit issue", make the title editable with a Save button
-- **#245** Settings garbled — one setting group per section, one setting per line (row grid)
-- **#249** bug: draft issue detail (`agent-created-pending`, e.g. IAM-12) returns invalid JSON — missing closing brace in `api_issue_detail` draft branch (serve.rs ~1545) → GUI JSON.parse error
-- **#250** format: `summary` as a separate optional front-matter field from `title` (decision 17) — spec, core, CLI, API, GUI list/detail/edit; both editable with Save (#244)
-- **#251** GUI: Sync / Approve / Reject must be self-explanatory — visible per-operation explanations on proposal cards, the sync button, and the review-queue header
-- **#252** human-side history: `GET /api/issues/<id>/history` + collapsible History section on the Human tab (issue.md's git log)
-- **#246/#247** `tools/dev-fixture-demo.sh` one-shot fixture repo (branch `vibe/dev-fixture-demo-246`, box-hardened: root-side mkdir+chown, prod-path hard-refusal)
-- **#132/#248** `deploy/install.sh` one-command box setup / migration off root (branch `vibe/deploy-install-132`, box-hardened: binary before init, no curl|grep -m1 EPIPE, /usr/local/bin symlink)
-- Gate: Tester PASS → merge → bump 0.1.9 → tag → owner re-review on the box
+Owner-reported cosmetics + fixes after deploying v0.1.8, all landed on main (Tester PASS + PO approval + FF each, main push CI green):
+
+- **#249** draft issue detail returned invalid JSON (missing brace in `api_issue_detail` draft branch) — PR #253
+- **#250** `summary` as a separate optional front-matter field from `title` (decision 17) — PR #254
+- **#244** issue view restructured: badges in header, meta strip, body card, collapsed Edit — PR #255
+- **#245** Settings: one setting per line (row grid), actions on own rows — PR #256
+- **#251** Sync / Approve / Reject self-explanatory (visible per-operation wording) — PR #257
+- **#252** human-side history: `GET /api/issues/<id>/history` + History section on the Human tab — PR #258
+- **#246** `tools/dev-fixture-demo.sh` one-shot fixture repo — PR #247
+- **#132** `deploy/install.sh` one-command box setup / migration off root — PR #248
+- Tagged **v0.1.9**. Next: owner re-review on the box (fixtures via `tools/dev-fixture-demo.sh`), then #239/#240 mobile, #188 dioxus trial, #234–#236, #3 gates.
 
 ## Next — owner smoke of v0.1.8 (#140 checklist)
 

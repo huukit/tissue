@@ -265,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "tissue-cli"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "clap",
  "clap_mangen",
@@ -275,7 +275,7 @@ dependencies = [
 
 [[package]]
 name = "tissue-core"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "serde",
  "serde_json",
