@@ -486,6 +486,69 @@ fn show_and_create_validate_input() {
     let out = repo.tissue(&["show", "IAM-999"]);
     Repo::assert_failure(&out, "unknown issue must fail");
 }
+
+/// #250: `create --summary` stores the paragraph as a front-matter field
+/// (block scalar when multi-line), `show` prints it, `list --search` matches
+/// it, and an issue without a summary still works (fallback display).
+#[test]
+fn create_with_summary_show_search_250() {
+    let repo = Repo::new("summary-250");
+    init(&repo);
+
+    let out = repo.tissue(&[
+        "create",
+        "IAM-1",
+        "Deploy notes",
+        "--body",
+        "b",
+        "--summary",
+        "Owner box runs the viewer; first line\nsecond line",
+    ]);
+    Repo::assert_success(&out, "create --summary");
+    let md = std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-1/issue.md")).unwrap();
+    assert!(
+        md.contains("summary: |-\n  Owner box runs the viewer; first line\n  second line\n"),
+        "multi-line summary rendered as a block scalar: {md}"
+    );
+
+    // show prints the summary under the title
+    let out = repo.tissue(&["show", "IAM-1"]);
+    Repo::assert_success(&out, "show");
+    let show = Repo::stdout(&out);
+    assert!(
+        show.contains("title:   Deploy notes")
+            && show.contains("summary: Owner box runs the viewer; first line\nsecond line"),
+        "show prints summary: {show}"
+    );
+
+    // search matches summary text (shared matcher, #212/#250)
+    let out = repo.tissue(&["list", "--search", "OWNER BOX"]);
+    Repo::assert_success(&out, "list --search");
+    assert!(
+        Repo::stdout(&out).contains("IAM-1"),
+        "summary matched by search: {}",
+        Repo::stdout(&out)
+    );
+
+    // no summary: create works, show falls back, search does not match summary
+    create(&repo, "IAM-2", "plain issue");
+    let out = repo.tissue(&["show", "IAM-2"]);
+    let show = Repo::stdout(&out);
+    assert!(
+        show.contains("summary: (title above)"),
+        "fallback display: {show}"
+    );
+    let md2 = std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-2/issue.md")).unwrap();
+    assert!(
+        !md2.contains("summary:"),
+        "absent summary stays absent: {md2}"
+    );
+    let out = repo.tissue(&["list", "--search", "owner box"]);
+    assert!(
+        !Repo::stdout(&out).contains("IAM-2"),
+        "IAM-2 must not match the other issue's summary"
+    );
+}
 #[test]
 fn multi_project_filters_and_full_loop() {
     let repo = Repo::new("multi-project");

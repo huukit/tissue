@@ -750,6 +750,95 @@ fn gui_edit_endpoint_and_conflict_handling() {
     );
 }
 
+/// #250: the API carries `summary` — absent reads as null, edit accepts it
+/// (multi-line, block scalar in issue.md) under the same revision guard,
+/// clearing works with "", and the sync diff records the summary change.
+#[test]
+fn edit_and_read_summary_via_api_250() {
+    let repo = Scratch::new("summary-250");
+    repo.set_token("test-token-1");
+    repo.tissue(&["create", "IAM-1", "Editable", "--body", "b"]);
+    let server = start_server(&repo);
+    let addr = server.addr;
+
+    // absent summary reads as null in list + detail JSON
+    let (status, body) = get(&addr, "/api/issues/IAM-1");
+    assert!(status.contains("200"), "detail: {status}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        v["issue"]["summary"],
+        serde_json::Value::Null,
+        "null when absent: {body}"
+    );
+
+    // edit summary (multi-line) with the revision guard
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues/IAM-1/edit",
+        r#"{"expected_revision": 1, "summary": "Line one\nLine two", "actor": "human:gui"}"#,
+        Some("test-token-1"),
+    );
+    assert!(status.contains("200"), "edit summary: {status} body {body}");
+    let issue = std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-1/issue.md")).unwrap();
+    assert!(
+        issue.contains("summary: |-\n  Line one\n  Line two\n"),
+        "block scalar in issue.md: {issue}"
+    );
+    assert!(issue.contains("revision: 2"), "revision bumped: {issue}");
+
+    // reads return it (detail + list)
+    let (status, body) = get(&addr, "/api/issues/IAM-1");
+    assert!(status.contains("200"), "detail read: {status}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        v["issue"]["summary"], "Line one\nLine two",
+        "detail: {body}"
+    );
+    let (status, body) = get(&addr, "/api/issues");
+    assert!(status.contains("200"));
+    assert!(body.contains("Line one"), "list carries summary: {body}");
+
+    // the sync diff records the summary change (#250: carried like any field)
+    let out = repo.tissue(&["sync", "IAM-1", "--summary", "human edited the summary"]);
+    assert!(out.status.success(), "sync: {out:?}");
+    let stream =
+        std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-1/agent.jsonl")).unwrap();
+    assert!(
+        stream.contains("\"field\":\"summary\"") && stream.contains("Line one"),
+        "sync diff has the summary change: {stream}"
+    );
+
+    // empty string clears the field (back to null); re-read the revision
+    // (sync does not mutate issue.md, but read it rather than assume).
+    let issue = std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-1/issue.md")).unwrap();
+    let rev: u64 = issue
+        .lines()
+        .find_map(|l| l.strip_prefix("revision: "))
+        .unwrap()
+        .parse()
+        .unwrap();
+    let (status, _, body) = post(
+        &addr,
+        "/api/issues/IAM-1/edit",
+        &format!(r#"{{"expected_revision": {rev}, "summary": "", "actor": "human:gui"}}"#),
+        Some("test-token-1"),
+    );
+    assert!(
+        status.contains("200"),
+        "clear summary: {status} body {body}"
+    );
+    let issue = std::fs::read_to_string(repo.root.join(".tissue/issues/IAM-1/issue.md")).unwrap();
+    assert!(!issue.contains("summary:"), "cleared: {issue}");
+    let (status, body) = get(&addr, "/api/issues/IAM-1");
+    assert!(status.contains("200"), "detail read after clear: {status}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        v["issue"]["summary"],
+        serde_json::Value::Null,
+        "cleared to null: {body}"
+    );
+}
+
 /// #159 AC1/AC2: managed hash-only tokens — `tissue token issue` stores
 /// only the SHA-256 in config.yml (never the plaintext), the issued token
 /// authorizes writes, `revoke` makes it fail closed (401), and

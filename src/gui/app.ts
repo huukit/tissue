@@ -30,6 +30,8 @@
 interface IssueSummary {
   id: string;
   title: string;
+  /** #250: optional summary paragraph; null = absent (display falls back to title). */
+  summary: string | null;
   /** #211: issue type (feature | task | bug). */
   type: "feature" | "task" | "bug";
   /** #211: workflow status; `closed` is migrated to `done` server-side. */
@@ -271,9 +273,14 @@ function lastTouchBadge(issue: IssueSummary): string {
 function rowHtml(issue: IssueSummary): string {
   const title = esc(issue.title);
   const updated = esc(new Date(issue.updated).toLocaleString());
+  // #250: summary as a muted second line (only when present).
+  const summaryLine = issue.summary
+    ? `<div class="issue-summary" title="${esc(issue.summary)}">${esc(issue.summary)}</div>`
+    : "";
   return `<li class="issue-row">
     <span class="issue-id">${esc(issue.id)}</span>
     <a class="issue-link issue-title" href="#/issue/${encodeURIComponent(issue.id)}">${title}</a>
+    ${summaryLine}
     <span class="badge project-badge" title="project (id prefix)">${esc(projectOf(issue.id))}</span>
     ${typeBadgeHtml(issue)}
     <span class="status ${statusClass(issue.status)}">${esc(issue.status)}</span>
@@ -1530,6 +1537,9 @@ function editFormHtml(issue: IssueDetail): string {
         <label>Title
           <input id="edit-title" type="text" value="${esc(issue.title)}">
         </label>
+        <label>Summary
+          <textarea id="edit-summary" rows="3" placeholder="Short paragraph a person can grasp in under a minute — distinct from the one-line title (empty = none)">${esc(issue.summary ?? "")}</textarea>
+        </label>
         <label>Type
           <select id="edit-type">
             ${TYPES.map(
@@ -1569,12 +1579,14 @@ function wireEditForm(issue: IssueDetail): void {
   submit.addEventListener("click", async () => {
     result.textContent = "…";
     const title = (document.getElementById("edit-title") as HTMLInputElement).value;
+    const summary = (document.getElementById("edit-summary") as HTMLTextAreaElement).value;
     const itype = (document.getElementById("edit-type") as HTMLSelectElement).value;
     const status = (document.getElementById("edit-status") as HTMLSelectElement).value;
     const parent = (document.getElementById("edit-parent") as HTMLInputElement).value.trim();
     const release = (document.getElementById("edit-release") as HTMLInputElement).value;
     const changed =
       title !== issue.title ||
+      summary !== (issue.summary ?? "") ||
       itype !== (issue.type ?? "task") ||
       status !== issue.status ||
       parent !== (issue.parent ?? "") ||
@@ -1591,6 +1603,7 @@ function wireEditForm(issue: IssueDetail): void {
         {
           expected_revision: issue.revision,
           title,
+          summary,
           type: itype,
           status,
           parent,
@@ -1821,6 +1834,7 @@ async function renderDetail(id: string, tab: "human" | "ai" = "human"): Promise<
       <a class="back-link" href="#/issues">&larr; All issues</a>
       <article class="detail">
         <h2>${esc(issue.id)} — ${esc(issue.title)} ${badgeHtml(issue.tags)}</h2>
+        ${issue.summary ? `<p class="detail-summary">${esc(issue.summary)}</p>` : ""}
         ${tokenBarHtml()}
         <div class="tabs" role="tablist">
           <button class="tab${tab === "human" ? " active" : ""}" data-tab="human" role="tab">Human</button>

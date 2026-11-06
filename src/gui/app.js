@@ -156,9 +156,14 @@ function lastTouchBadge(issue) {
 function rowHtml(issue) {
     const title = esc(issue.title);
     const updated = esc(new Date(issue.updated).toLocaleString());
+    // #250: summary as a muted second line (only when present).
+    const summaryLine = issue.summary
+        ? `<div class="issue-summary" title="${esc(issue.summary)}">${esc(issue.summary)}</div>`
+        : "";
     return `<li class="issue-row">
     <span class="issue-id">${esc(issue.id)}</span>
     <a class="issue-link issue-title" href="#/issue/${encodeURIComponent(issue.id)}">${title}</a>
+    ${summaryLine}
     <span class="badge project-badge" title="project (id prefix)">${esc(projectOf(issue.id))}</span>
     ${typeBadgeHtml(issue)}
     <span class="status ${statusClass(issue.status)}">${esc(issue.status)}</span>
@@ -1401,13 +1406,16 @@ function renderMarkdown(src) {
     return out.join("\n");
 }
 function editFormHtml(issue) {
-    var _a, _b;
+    var _a, _b, _c;
     return `
     <details class="edit-box">
       <summary>Edit front matter</summary>
       <div class="edit-fields">
         <label>Title
           <input id="edit-title" type="text" value="${esc(issue.title)}">
+        </label>
+        <label>Summary
+          <textarea id="edit-summary" rows="3" placeholder="Short paragraph a person can grasp in under a minute — distinct from the one-line title (empty = none)">${esc((_a = issue.summary) !== null && _a !== void 0 ? _a : "")}</textarea>
         </label>
         <label>Type
           <select id="edit-type">
@@ -1420,11 +1428,11 @@ function editFormHtml(issue) {
           </select>
         </label>
         <label>Parent
-          <input id="edit-parent" type="text" value="${esc((_a = issue.parent) !== null && _a !== void 0 ? _a : "")}"
+          <input id="edit-parent" type="text" value="${esc((_b = issue.parent) !== null && _b !== void 0 ? _b : "")}"
                  placeholder="feature id, e.g. IAM-42 (empty = none; task/bug only)">
         </label>
         <label>Release
-          <input id="edit-release" type="text" value="${esc((_b = issue.release) !== null && _b !== void 0 ? _b : "")}"
+          <input id="edit-release" type="text" value="${esc((_c = issue.release) !== null && _c !== void 0 ? _c : "")}"
                  placeholder="e.g. v1.2.0 (empty = unscheduled)">
         </label>
         <button id="edit-submit">Save changes</button>
@@ -1440,18 +1448,20 @@ function wireEditForm(issue) {
     if (!submit || !sync || !result)
         return;
     submit.addEventListener("click", async () => {
-        var _a, _b, _c;
+        var _a, _b, _c, _d;
         result.textContent = "…";
         const title = document.getElementById("edit-title").value;
+        const summary = document.getElementById("edit-summary").value;
         const itype = document.getElementById("edit-type").value;
         const status = document.getElementById("edit-status").value;
         const parent = document.getElementById("edit-parent").value.trim();
         const release = document.getElementById("edit-release").value;
         const changed = title !== issue.title ||
-            itype !== ((_a = issue.type) !== null && _a !== void 0 ? _a : "task") ||
+            summary !== ((_a = issue.summary) !== null && _a !== void 0 ? _a : "") ||
+            itype !== ((_b = issue.type) !== null && _b !== void 0 ? _b : "task") ||
             status !== issue.status ||
-            parent !== ((_b = issue.parent) !== null && _b !== void 0 ? _b : "") ||
-            (release || "") !== ((_c = issue.release) !== null && _c !== void 0 ? _c : "");
+            parent !== ((_c = issue.parent) !== null && _c !== void 0 ? _c : "") ||
+            (release || "") !== ((_d = issue.release) !== null && _d !== void 0 ? _d : "");
         if (!changed) {
             result.textContent = "No changes — nothing to save.";
             return;
@@ -1462,6 +1472,7 @@ function wireEditForm(issue) {
             await postJson(`/api/issues/${encodeURIComponent(issue.id)}/edit`, {
                 expected_revision: issue.revision,
                 title,
+                summary,
                 type: itype,
                 status,
                 parent,
@@ -1683,6 +1694,7 @@ async function renderDetail(id, tab = "human") {
       <a class="back-link" href="#/issues">&larr; All issues</a>
       <article class="detail">
         <h2>${esc(issue.id)} — ${esc(issue.title)} ${badgeHtml(issue.tags)}</h2>
+        ${issue.summary ? `<p class="detail-summary">${esc(issue.summary)}</p>` : ""}
         ${tokenBarHtml()}
         <div class="tabs" role="tablist">
           <button class="tab${tab === "human" ? " active" : ""}" data-tab="human" role="tab">Human</button>

@@ -94,6 +94,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
     Title,
+    /// #250: optional summary paragraph, distinct from the one-line title.
+    Summary,
     Status,
     Release,
     /// #211: issue type (feature|task|bug).
@@ -109,6 +111,7 @@ impl Field {
     pub fn as_str(&self) -> &'static str {
         match self {
             Field::Title => "title",
+            Field::Summary => "summary",
             Field::Status => "status",
             Field::Release => "release",
             Field::Type => "type",
@@ -120,6 +123,7 @@ impl Field {
     fn from_str(s: &str) -> Option<Self> {
         match s {
             "title" => Some(Field::Title),
+            "summary" => Some(Field::Summary),
             "status" => Some(Field::Status),
             "release" => Some(Field::Release),
             "type" => Some(Field::Type),
@@ -350,6 +354,7 @@ impl Core {
     fn field_text(issue: &IssueFile, field: Field) -> String {
         match field {
             Field::Title => issue.title.clone(),
+            Field::Summary => issue.summary.clone().unwrap_or_default(),
             Field::Status => issue.status.as_str().to_string(),
             Field::Release => issue.release.clone().unwrap_or_default(),
             Field::Type => issue.issue_type.as_str().to_string(),
@@ -411,6 +416,15 @@ impl Core {
                     return Err(Error::Proposal("title must be one line".into()));
                 }
                 issue.set_title(value.to_string(), now);
+            }
+            Field::Summary => {
+                // #250: multi-line allowed; empty string clears the field.
+                let summary = if value.is_empty() {
+                    None
+                } else {
+                    Some(value.to_string())
+                };
+                issue.set_summary(summary, now);
             }
             Field::Status => {
                 let to = IssueStatus::parse(value).map_err(Error::Human)?;
@@ -673,7 +687,7 @@ impl Core {
             .map(|s| s.to_string())
     }
 
-    /// Field-level human-format diff (title/type/status/parent/release/tags/body).
+    /// Field-level human-format diff (title/summary/type/status/parent/release/tags/body).
     /// Front-matter bookkeeping fields (created/updated/revision) are
     /// excluded: they move on every write and carry no reconciliation
     /// meaning.
@@ -689,6 +703,11 @@ impl Core {
             }
         };
         push("title", before.title.clone(), after.title.clone());
+        push(
+            "summary",
+            before.summary.clone().unwrap_or_default(),
+            after.summary.clone().unwrap_or_default(),
+        );
         push(
             "type",
             before.issue_type.as_str().to_string(),

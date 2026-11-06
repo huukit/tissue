@@ -1056,7 +1056,7 @@ fn api_write_agent_test(stream: &mut TcpStream, repo: &Path) -> Result<(), Strin
 }
 
 /// POST /api/issues  {"id": "IAM-9", "title": "...", "actor": "agent:dev-1",
-///                    (optional) "body", "project", "type", "parent"}
+///                    (optional) "body", "project", "type", "parent", "summary"}
 /// Creates an issue (human format untouched by the agent afterwards).
 fn api_write_create_issue(
     stream: &mut TcpStream,
@@ -1087,6 +1087,8 @@ fn api_write_create_issue(
     // #211: optional type (feature|task|bug, default task) + parent id.
     let issue_type = json_field(&v, "type");
     let parent = json_field(&v, "parent");
+    // #250: optional summary paragraph.
+    let summary = json_field(&v, "summary");
     match crate::api_write::create_issue(
         repo,
         &crate::api_write::CreateIssue {
@@ -1097,6 +1099,7 @@ fn api_write_create_issue(
             project,
             issue_type,
             parent,
+            summary,
         },
     ) {
         Ok(()) => respond_json(
@@ -1340,8 +1343,8 @@ fn api_write_sync(
 }
 
 /// POST /api/issues/<id>/edit: human front-matter edit with the #78
-/// revision guard. {"expected_revision": N, optional "title"/"status"/
-/// "release"/"type"/"parent", "actor": "human:..."}. Conflict => 409 with
+/// revision guard. {"expected_revision": N, optional "title"/"summary"/
+/// "status"/"release"/"type"/"parent", "actor": "human:..."}. Conflict => 409 with
 /// the re-read-and-re-apply message; never a silent overwrite (#99 AC2).
 fn api_write_edit(
     stream: &mut TcpStream,
@@ -1371,12 +1374,15 @@ fn api_write_edit(
         );
     };
     let title = json_field(&v, "title");
+    // #250: optional summary paragraph (empty string clears).
+    let summary = json_field(&v, "summary");
     let status = json_field(&v, "status");
     let release = json_field(&v, "release");
     // #211: optional type + parent flow through the same guarded edit.
     let issue_type = json_field(&v, "type");
     let parent = json_field(&v, "parent");
     if title.is_none()
+        && summary.is_none()
         && status.is_none()
         && release.is_none()
         && issue_type.is_none()
@@ -1385,7 +1391,7 @@ fn api_write_edit(
         return respond_json(
             stream,
             400,
-            "{\"error\":\"nothing to edit: provide at least one of title, status, release, type, parent\"}",
+            "{\"error\":\"nothing to edit: provide at least one of title, summary, status, release, type, parent\"}",
         );
     }
     if let Some(s) = status {
@@ -1408,6 +1414,7 @@ fn api_write_edit(
             id,
             expected_revision: rev,
             title,
+            summary,
             status,
             release,
             issue_type,
@@ -1480,9 +1487,13 @@ fn creation_draft_summary(repo: &Path, dir: &Path) -> Option<IssueFile> {
 
 fn issue_summary_json(issue: &IssueFile) -> String {
     format!(
-        "{{\"id\":{},\"title\":{},\"type\":\"{}\",\"status\":\"{}\",\"parent\":{},\"release\":{},\"tags\":{},\"created\":{},\"updated\":{}}}",
+        "{{\"id\":{},\"title\":{},\"summary\":{},\"type\":\"{}\",\"status\":\"{}\",\"parent\":{},\"release\":{},\"tags\":{},\"created\":{},\"updated\":{}}}",
         json_str(&issue.id),
         json_str(&issue.title),
+        match &issue.summary {
+            Some(s) => json_str(s),
+            None => "null".to_string(),
+        },
         issue.issue_type.as_str(),
         issue.status.as_str(),
         match &issue.parent {

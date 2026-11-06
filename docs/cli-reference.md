@@ -57,6 +57,7 @@ tissue create DOC-2 --title "Proofread guide" --body "Body text, no editor."
 tissue create OPS-7 "Fix deploy" --project ops     # sign to a project (#172)
 tissue create IAM-10 "Login flow" --type feature    # types per #211
 tissue create IAM-11 "Fix login redirect" --type bug --parent IAM-10
+tissue create IAM-12 "Deploy notes" --summary "Short paragraph for humans, distinct from the title"   # #250
 ```
 
 `--project <NAME>` signs the issue to a project from `.tissue/config.yml`;
@@ -76,6 +77,7 @@ Commits: exactly one, `create <ID>: <TITLE>`.
 | `--project <NAME>` | Project to sign the issue to (id prefix must match its configured prefix) |
 | `--type <TYPE>` | Issue type (#211): `feature`, `task` (default), or `bug` |
 | `--parent <ID>` | Parent feature id (#211): must exist and be a feature; only `task`/`bug` may have one |
+| `--summary <TEXT>` | Summary paragraph (#250): distinct from the one-line title; multi-line allowed; shown by `show`, the API, and the GUI, and matched by `--search` |
 
 ---
 
@@ -175,8 +177,8 @@ the default `project:` entry. Prefixes are uppercase ASCII letters (the
 
 ## `tissue show <ID>`
 
-Print one issue: front-matter fields (`id`, `title`, `type`, `status`,
-`parent`, `release`, `tags`, …) and body. Read-only.
+Print one issue: front-matter fields (`id`, `title`, `summary` (#250),
+`type`, `status`, `parent`, `release`, `tags`, …) and body. Read-only.
 
 ```sh
 tissue show IAM-42
@@ -188,7 +190,7 @@ tissue show IAM-42
 
 Record a human edit in the AI stream. Run this **after** editing
 `issue.md` — tissue computes the exact field-level changes since the last
-sync (title/type/status/parent/release/tags/body) and records them in the
+sync (title/summary/type/status/parent/release/tags/body) and records them in the
 `human-sync` record, together with a snapshot of the human format at sync
 time (the next sync's baseline). Agents reconcile from that data, never
 from raw diffs.

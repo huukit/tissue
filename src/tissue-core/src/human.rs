@@ -256,6 +256,33 @@ fn yaml_scalar(v: &Value) -> String {
         .to_string()
 }
 
+/// #250: render a front-matter string — plain scalar when single-line, an
+/// exact literal block scalar when multi-line (chomping indicator preserves
+/// trailing newlines).
+fn yaml_text_scalar(s: &str) -> String {
+    if !s.contains('\n') {
+        return yaml_scalar(&Value::String(s.to_string()));
+    }
+    let indicator = if s.ends_with("\n\n") {
+        "+"
+    } else if s.ends_with('\n') {
+        ""
+    } else {
+        "-"
+    };
+    let mut out = format!("|{indicator}");
+    for line in s.split_inclusive('\n') {
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        if line.is_empty() {
+            out.push('\n');
+        } else {
+            out.push_str("\n  ");
+            out.push_str(line);
+        }
+    }
+    out
+}
+
 /// #195: YAML double-quoted scalar — safe inside a flow sequence for any
 /// string (unlike `yaml_scalar`, which quotes for block context only).
 fn yaml_dquote(s: &str) -> String {
@@ -390,6 +417,10 @@ fn atomic_write(path: &Path, content: &str) -> Result<()> {
 pub struct IssueFile {
     pub id: String,
     pub title: String,
+    /// #250: optional short human-written paragraph, distinct from the
+    /// one-line title; absent = backwards compatible (display falls back to
+    /// the title). Multi-line allowed (YAML block scalar on serialize).
+    pub summary: Option<String>,
     /// #211: issue type; defaults to `task` when absent in front matter.
     pub issue_type: IssueType,
     pub status: IssueStatus,
@@ -409,9 +440,9 @@ pub struct IssueFile {
 }
 
 /// #212: the one shared search matcher — case-insensitive substring over id,
-/// title, body, tags, type, parent, status, and release. Used by the CLI
-/// (`list --search`) and the API (`GET /api/issues?q=`) so results can never
-/// drift.
+/// title, summary (#250), body, tags, type, parent, status, and release.
+/// Used by the CLI (`list --search`) and the API (`GET /api/issues?q=`) so
+/// results can never drift.
 pub fn matches_query(issue: &IssueFile, q: &str) -> bool {
     let needle = q.to_lowercase();
     if needle.is_empty() {
@@ -419,6 +450,12 @@ pub fn matches_query(issue: &IssueFile, q: &str) -> bool {
     }
     issue.id.to_lowercase().contains(&needle)
         || issue.title.to_lowercase().contains(&needle)
+        || issue
+            .summary
+            .as_deref()
+            .unwrap_or("")
+            .to_lowercase()
+            .contains(&needle)
         || issue.body.to_lowercase().contains(&needle)
         || issue.issue_type.as_str().contains(&needle)
         || issue
@@ -477,6 +514,7 @@ impl IssueFile {
         Ok(IssueFile {
             id: id.to_string(),
             title: title.to_string(),
+            summary: None,
             issue_type: IssueType::Task,
             status,
             parent: None,
@@ -518,6 +556,8 @@ impl IssueFile {
         if title.contains('\n') {
             return Err(Error::Validation("title must be a single line".into()));
         }
+        // #250: optional summary paragraph; absent = None (backwards compatible).
+        let summary = opt_string_field(&mapping, "summary")?;
         // #211: absent `type` reads as `task` (backwards compatible).
         let issue_type = match opt_string_field(&mapping, "type")? {
             None => IssueType::Task,
@@ -557,13 +597,14 @@ impl IssueFile {
         let extra = strip_known(
             &mapping,
             &[
-                "id", "title", "type", "status", "parent", "release", "tags", "created", "updated",
-                "revision",
+                "id", "title", "summary", "type", "status", "parent", "release", "tags", "created",
+                "updated", "revision",
             ],
         );
         Ok(IssueFile {
             id,
             title,
+            summary,
             issue_type,
             status,
             parent,
@@ -592,6 +633,13 @@ impl IssueFile {
         let known = vec![
             ("id", self.id.clone()),
             ("title", yaml_scalar(&Value::String(self.title.clone()))),
+            (
+                "summary",
+                self.summary
+                    .as_deref()
+                    .map(yaml_text_scalar)
+                    .unwrap_or_default(),
+            ),
             ("type", self.issue_type.as_str().to_string()),
             ("status", self.status.as_str().to_string()),
             ("parent", self.parent.clone().unwrap_or_default()),
@@ -655,6 +703,13 @@ impl IssueFile {
     /// `now` is an RFC3339 timestamp supplied by the caller (no hidden clock).
     pub fn set_title(&mut self, title: String, now: &str) {
         self.title = title;
+        self.front.invalidate();
+        self.updated = now.to_string();
+    }
+
+    /// #250: set/clear the optional summary paragraph (empty string clears).
+    pub fn set_summary(&mut self, summary: Option<String>, now: &str) {
+        self.summary = summary.filter(|s| !s.is_empty());
         self.front.invalidate();
         self.updated = now.to_string();
     }
@@ -887,6 +942,69 @@ mod tests {
     fn issue_round_trip_is_byte_identical_when_unchanged() {
         let file = IssueFile::parse(ISSUE).unwrap();
         assert_eq!(file.serialize(), ISSUE);
+    }
+
+    #[test]
+    fn summary_field_round_trips_250() {
+        // absent = None, byte-identical round trip (backwards compatible)
+        let file = IssueFile::parse(ISSUE).unwrap();
+        assert_eq!(file.summary, None);
+        assert_eq!(file.serialize(), ISSUE);
+
+        // single-line summary round-trips through mutation
+        let mut file = IssueFile::parse(ISSUE).unwrap();
+        file.set_summary(
+            Some("One paragraph a human can grasp in under a minute.".into()),
+            "2026-10-09T10:00:00Z",
+        );
+        let out = file.serialize();
+        assert!(out.contains("summary: One paragraph"), "rendered: {out}");
+        let reparsed = IssueFile::parse(&out).unwrap();
+        assert_eq!(
+            reparsed.summary.as_deref(),
+            Some("One paragraph a human can grasp in under a minute.")
+        );
+        assert_eq!(reparsed.serialize(), out, "idempotent second round-trip");
+
+        // multi-line summary: block scalar parse + exact re-serialize
+        let multi = "---\nid: IAM-43\ntitle: T\nsummary: |\n  line one\n  line two\nstatus: open\ncreated: 2026-10-08T09:00:00Z\nupdated: 2026-10-08T09:00:00Z\n---\n\nBody\n";
+        let file = IssueFile::parse(multi).unwrap();
+        assert_eq!(file.summary.as_deref(), Some("line one\nline two\n"));
+        let out = file.serialize();
+        let reparsed = IssueFile::parse(&out).unwrap();
+        assert_eq!(reparsed.summary.as_deref(), Some("line one\nline two\n"));
+        assert_eq!(reparsed.serialize(), out);
+
+        // set_summary with Some then mutation renders a block scalar, and
+        // clearing (empty) drops the field again
+        let mut file = IssueFile::parse(ISSUE).unwrap();
+        file.set_summary(Some("a\nb".into()), "2026-10-09T10:00:00Z");
+        let out = file.serialize();
+        assert!(
+            out.contains("summary: |-\n  a\n  b\n"),
+            "block scalar: {out}"
+        );
+        assert_eq!(
+            IssueFile::parse(&out).unwrap().summary.as_deref(),
+            Some("a\nb")
+        );
+        file.set_summary(Some(String::new()), "2026-10-09T10:01:00Z");
+        let out = file.serialize();
+        assert!(!out.contains("summary:"), "cleared: {out}");
+        assert_eq!(IssueFile::parse(&out).unwrap().summary, None);
+    }
+
+    #[test]
+    fn matches_query_covers_summary_250() {
+        let file = IssueFile::parse(
+            "---\nid: IAM-7\ntitle: T\nsummary: Deploy notes for the owner box\nstatus: open\ncreated: 2026-10-08T09:00:00Z\nupdated: 2026-10-08T09:00:00Z\n---\n\nBody\n",
+        )
+        .unwrap();
+        assert!(
+            matches_query(&file, "DEPLOY NOTES"),
+            "summary, case-insensitive"
+        );
+        assert!(!matches_query(&file, "unrelated"));
     }
 
     #[test]

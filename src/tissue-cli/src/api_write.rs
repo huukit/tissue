@@ -44,6 +44,8 @@ pub struct CreateIssue<'a> {
     pub issue_type: Option<&'a str>,
     /// #211: parent feature id.
     pub parent: Option<&'a str>,
+    /// #250: optional summary paragraph (multi-line allowed).
+    pub summary: Option<&'a str>,
 }
 
 /// POST /api/issues: create an issue. Human actors write the human format
@@ -59,6 +61,7 @@ pub fn create_issue(repo: &Path, p: &CreateIssue<'_>) -> Result<(), String> {
         project,
         issue_type,
         parent,
+        summary,
     } = *p;
     if !valid_issue_id(id) {
         return Err(format!(
@@ -111,6 +114,10 @@ pub fn create_issue(repo: &Path, p: &CreateIssue<'_>) -> Result<(), String> {
         issue
             .set_parent(Some(p.to_string()), &now)
             .map_err(|e| format!("parent: {e}"))?;
+    }
+    // #250: optional summary paragraph on the human-actor create path.
+    if let Some(s) = summary {
+        issue.set_summary(Some(s.to_string()), &now);
     }
     std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     issue
@@ -176,13 +183,14 @@ pub fn propose(
 ) -> Result<String, String> {
     let field = match field {
         "title" => Field::Title,
+        "summary" => Field::Summary,
         "status" => Field::Status,
         "release" => Field::Release,
         "type" => Field::Type,
         "parent" => Field::Parent,
         other => {
             return Err(format!(
-                "invalid field `{other}`: expected title, status, release, type, or parent"
+                "invalid field `{other}`: expected title, summary, status, release, type, or parent"
             ))
         }
     };
@@ -227,6 +235,8 @@ pub struct EditIssue<'a> {
     pub id: &'a str,
     pub expected_revision: u64,
     pub title: Option<&'a str>,
+    /// #250: summary paragraph (empty string clears).
+    pub summary: Option<&'a str>,
     pub status: Option<&'a str>,
     pub release: Option<&'a str>,
     /// #211: `feature` | `task` | `bug`.
@@ -245,6 +255,7 @@ pub fn edit_issue(repo: &Path, p: &EditIssue<'_>) -> Result<(), String> {
         id,
         expected_revision,
         title,
+        summary,
         status,
         release,
         issue_type,
@@ -271,6 +282,15 @@ pub fn edit_issue(repo: &Path, p: &EditIssue<'_>) -> Result<(), String> {
             return Err("title must be one line".into());
         }
         issue.set_title(t.to_string(), &now);
+    }
+    if let Some(s) = summary {
+        // #250: multi-line summary; empty string clears the field.
+        let summary = if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        };
+        issue.set_summary(summary, &now);
     }
     if let Some(s) = status {
         let st = IssueStatus::parse(s).map_err(|e| format!("status: {e}"))?;

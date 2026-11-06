@@ -55,6 +55,9 @@ One Markdown file per unit of work, with YAML front matter:
 ---
 id: IAM-42                  # required, immutable, matches directory name
 title: Sync fails on empty agent stream   # required, one line
+summary: |                # optional, #250: short human-written paragraph, distinct from the title (multi-line allowed; absent = backwards compatible, display falls back to title)
+  Sync breaks when the agent stream is empty because the reconciler
+  assumes at least one record.
 type: task                 # optional, #211: feature | task | bug (absent = task, backwards compatible)
 status: open               # open | in-progress | review | done | rejected (#211; `closed` migrates to `done` on read)
 parent: IAM-40             # optional, #211: parent feature id (task/bug only; must exist and be a feature)
@@ -82,6 +85,7 @@ Optional human commentary. AI working data does NOT go here — it goes in `agen
 ### Field rules
 
 - `id`: immutable after creation, matches the directory name exactly. Valid pattern: `[A-Z]+-\d+`.
+- `summary` (#250, decision 17): optional paragraph a person can grasp in under a minute — distinct from the one-line `title`. Multi-line allowed (YAML block scalar). Absent = backwards compatible; no data rewrite on read, consumers fall back to `title` for display. Matched by search (#212), carried by the sync diff and proposals like any other field; editable via CLI/API/GUI with the same revision guard as `title`.
 - `type` (#211, decision 15): `feature` (a collection of tasks/bugs linked via `parent`), `task` (directly implementable), or `bug` (non-conformance report against a feature). Absent = `task`. Only `task`/`bug` may carry a `parent`; a feature cannot.
 - `parent` (#211): the parent feature's id. Validated at create/edit/approve time: the parent must exist and be a feature, and the issue must not be its own parent (or a feature).
 - `status` (#211): `open | in-progress | review | done | rejected`. Migration: `closed` reads as `done` and is written back as `done` on the next mutation — no data rewrite. `review` is a *human* review state, distinct from the `needs-review` tag (AI awaiting decision, decision 16). Workflow transitions enforced on programmatic changes (API edit, proposal approval): `open→in-progress→review→done`, `review→in-progress` (changes requested), `any→rejected`, `rejected→open` (reopen). `done` stamps the release that shipped it when a release link exists.

@@ -81,6 +81,10 @@ pub enum Commands {
         /// `task`/`bug` issues may have one.
         #[arg(long, value_name = "ID")]
         parent: Option<String>,
+        /// Optional short summary paragraph, distinct from the one-line
+        /// title (#250).
+        #[arg(long, value_name = "TEXT")]
+        summary: Option<String>,
     },
     /// List issues; issues awaiting a human decision are flagged `[awaiting decision]`
     /// (stored tag: `needs-review`).

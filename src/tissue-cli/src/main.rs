@@ -113,6 +113,7 @@ fn run(cli: Cli) -> Result<(), String> {
             project,
             issue_type,
             parent,
+            summary,
         } => {
             // #145: accept both `tissue create <ID> <TITLE>` and
             // `tissue create <ID> --title <TITLE>`; exactly one required.
@@ -130,11 +131,14 @@ fn run(cli: Cli) -> Result<(), String> {
             create(
                 &repo,
                 &id,
-                &title,
-                body,
-                project.as_deref(),
-                issue_type.as_deref(),
-                parent.as_deref(),
+                &CreateOpts {
+                    title: &title,
+                    body,
+                    project: project.as_deref(),
+                    issue_type: issue_type.as_deref(),
+                    parent: parent.as_deref(),
+                    summary: summary.as_deref(),
+                },
             )
         }
         Commands::List {
@@ -455,13 +459,14 @@ fn propose_cmd(
     check_issue_id(id)?;
     let field = match field {
         "title" => Field::Title,
+        "summary" => Field::Summary,
         "status" => Field::Status,
         "release" => Field::Release,
         "type" => Field::Type,
         "parent" => Field::Parent,
         other => {
             return Err(format!(
-                "invalid field `{other}`: expected title, status, release, type, or parent"
+                "invalid field `{other}`: expected title, summary, status, release, type, or parent"
             ))
         }
     };
@@ -538,15 +543,24 @@ fn civil_from_unix(secs: u64) -> (i64, u32, u32, u32, u32, u32) {
     )
 }
 
-fn create(
-    repo: &Path,
-    id: &str,
-    title: &str,
+/// Options for `create` (grouped — the param list was at clippy's limit).
+struct CreateOpts<'a> {
+    title: &'a str,
     body: Option<String>,
-    project: Option<&str>,
-    issue_type: Option<&str>,
-    parent: Option<&str>,
-) -> Result<(), String> {
+    project: Option<&'a str>,
+    issue_type: Option<&'a str>,
+    parent: Option<&'a str>,
+    /// #250: optional summary paragraph.
+    summary: Option<&'a str>,
+}
+
+fn create(repo: &Path, id: &str, o: &CreateOpts<'_>) -> Result<(), String> {
+    let title = o.title;
+    let body = o.body.clone();
+    let project = o.project;
+    let issue_type = o.issue_type;
+    let parent = o.parent;
+    let summary = o.summary;
     require_repo(repo)?;
     check_issue_id(id)?;
     // #172/#176: the id prefix must match the chosen (or default) project —
@@ -581,6 +595,10 @@ fn create(
         issue
             .set_parent(Some(p.to_string()), &now)
             .map_err(|e| format!("parent: {e}"))?;
+    }
+    // #250: optional summary paragraph (multi-line allowed).
+    if let Some(s) = summary {
+        issue.set_summary(Some(s.to_string()), &now);
     }
     let dir = issue_dir(repo, id);
     std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
@@ -804,6 +822,11 @@ fn show(repo: &Path, id: &str) -> Result<(), String> {
     };
     println!("id:      {}", issue.id);
     println!("title:   {}", issue.title);
+    match &issue.summary {
+        // #250: absent summary displays as the title (spec fallback).
+        Some(s) => println!("summary: {s}"),
+        None => println!("summary: (title above)"),
+    }
     println!("type:    {}", issue.issue_type.as_str());
     println!("status:  {}", issue.status.as_str());
     match &issue.parent {
