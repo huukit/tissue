@@ -647,11 +647,17 @@ function proposalCardHtml(entry) {
     ${p.rationale ? `<p class="proposal-rationale">${esc(p.rationale)}</p>` : ""}
     <div class="proposal-actions">
       <button class="btn btn-approve" data-issue="${esc(entry.issue.id)}"
-        data-proposal="${esc(p.proposal_id)}">Approve</button>
+        data-proposal="${esc(p.proposal_id)}"
+        title="Apply this proposed change to issue.md now (committed; clears awaiting-decision)">Approve</button>
       <button class="btn btn-reject" data-issue="${esc(entry.issue.id)}"
-        data-proposal="${esc(p.proposal_id)}">Reject…</button>
+        data-proposal="${esc(p.proposal_id)}"
+        title="Decline it: issue.md stays unchanged; your reason is recorded in agent.jsonl so the agent can learn from it">Reject…</button>
       <span class="proposal-result" data-result-for="${esc(p.proposal_id)}"></span>
     </div>
+    <p class="proposal-explain">
+      <span><strong>Approve</strong> — apply this proposed change to <code>issue.md</code> now (committed; clears awaiting-decision).</span>
+      <span><strong>Reject</strong> — decline it: <code>issue.md</code> stays unchanged; your reason is recorded in <code>agent.jsonl</code> so the agent can learn from it.</span>
+    </p>
   </li>`;
 }
 async function decideFromGui(issueId, proposalId, decision) {
@@ -704,6 +710,8 @@ async function renderReviewQueue() {
     const flagged = allIssues.filter((i) => i.tags.includes(NEEDS_REVIEW));
     el.innerHTML = `
     <h2 class="view-title">Awaiting your decision</h2>
+    <p class="settings-note">AI proposals awaiting your decision — nothing changes in the
+      human format until you approve.</p>
     ${tokenBarHtml()}`;
     bindTokenBar();
     if (flagged.length === 0) {
@@ -1458,17 +1466,31 @@ function editFormHtml(issue) {
                  placeholder="e.g. v1.2.0 (empty = unscheduled)">
         </label>
         <button id="edit-submit">Save changes</button>
-        <button id="sync-btn" title="Reconcile your edits into the agent stream (records the exact field-level changes since the last sync)">Sync</button>
       </div>
       <p id="edit-result" class="edit-result" aria-live="polite"></p>
     </details>`;
+}
+/** #251: the Sync control lives outside the collapsed edit form (sync
+ * applies to any human-side change, not just form edits), with a visible
+ * caption saying what it does. */
+function syncRowHtml() {
+    return `
+    <div class="sync-row">
+      <button id="sync-btn" class="btn" type="button"
+        title="Record your manual edits to issue.md — records the exact field-level diff the agent will reconcile from">Sync</button>
+      <p class="sync-caption">Record your manual edits to <code>issue.md</code> — records the
+        exact field-level diff the agent will reconcile from.</p>
+      <p id="sync-result" class="edit-result" aria-live="polite"></p>
+    </div>`;
 }
 function wireEditForm(issue) {
     const submit = document.getElementById("edit-submit");
     const sync = document.getElementById("sync-btn");
     const result = document.getElementById("edit-result");
-    if (!submit || !sync || !result)
+    const syncResult = document.getElementById("sync-result");
+    if (!submit || !sync || !result || !syncResult)
         return;
+    const syncResultEl = syncResult;
     submit.addEventListener("click", async () => {
         var _a, _b, _c, _d;
         result.textContent = "…";
@@ -1515,10 +1537,10 @@ function wireEditForm(issue) {
     });
     sync.addEventListener("click", async () => {
         var _a, _b;
-        result.textContent = "…";
+        syncResultEl.textContent = "…";
         const summary = prompt("One-line summary of your edit (recorded with the exact field-level changes):");
         if (!summary) {
-            result.textContent = "Sync cancelled — no summary given.";
+            syncResultEl.textContent = "Sync cancelled — no summary given.";
             return;
         }
         try {
@@ -1529,23 +1551,23 @@ function wireEditForm(issue) {
                 // #137: if an agent is configured, the sync also ran it; show the outcome.
                 if (r.agent_run) {
                     const a = r.agent_run;
-                    result.textContent = a.success
+                    syncResultEl.textContent = a.success
                         ? `Synced — changes recorded, and the configured agent ran ok (${a.duration_ms} ms).`
                         : a.timed_out
                             ? `Synced — changes recorded; the configured agent timed out (recorded as a failure note).`
                             : `Synced — changes recorded; the configured agent failed (exit ${(_a = a.exit_code) !== null && _a !== void 0 ? _a : "?"}).`;
                 }
                 else {
-                    result.textContent = "Synced — your changes are recorded in the agent stream for agents to reconcile from. (No agent configured — record only.)";
+                    syncResultEl.textContent = "Synced — your changes are recorded in the agent stream for agents to reconcile from. (No agent configured — record only.)";
                 }
                 void route();
             }
             else {
-                result.textContent = (_b = r.reason) !== null && _b !== void 0 ? _b : "Nothing to sync — no changes since the last sync.";
+                syncResultEl.textContent = (_b = r.reason) !== null && _b !== void 0 ? _b : "Nothing to sync — no changes since the last sync.";
             }
         }
         catch (e) {
-            result.textContent = e instanceof Error ? e.message : String(e);
+            syncResultEl.textContent = e instanceof Error ? e.message : String(e);
         }
     });
 }
@@ -1567,11 +1589,17 @@ function proposalCardDetailHtml(p) {
     ${p.rationale ? `<p class="proposal-rationale">${esc(p.rationale)}</p>` : ""}
     <div class="proposal-actions">
       <button class="btn btn-approve" data-issue="${esc((_a = p.issue_id) !== null && _a !== void 0 ? _a : "")}"
-        data-proposal="${esc(p.proposal_id)}">Approve</button>
+        data-proposal="${esc(p.proposal_id)}"
+        title="Apply this proposed change to issue.md now (committed; clears awaiting-decision)">Approve</button>
       <button class="btn btn-reject" data-issue="${esc((_b = p.issue_id) !== null && _b !== void 0 ? _b : "")}"
-        data-proposal="${esc(p.proposal_id)}">Reject…</button>
+        data-proposal="${esc(p.proposal_id)}"
+        title="Decline it: issue.md stays unchanged; your reason is recorded in agent.jsonl so the agent can learn from it">Reject…</button>
       <span class="proposal-result" data-result-for="${esc(p.proposal_id)}"></span>
     </div>
+    <p class="proposal-explain">
+      <span><strong>Approve</strong> — apply this proposed change to <code>issue.md</code> now (committed; clears awaiting-decision).</span>
+      <span><strong>Reject</strong> — decline it: <code>issue.md</code> stays unchanged; your reason is recorded in <code>agent.jsonl</code> so the agent can learn from it.</span>
+    </p>
   </li>`;
 }
 /** Tab bar for the issue detail's Human/AI split (#170). */
@@ -1713,7 +1741,8 @@ async function renderDetail(id, tab = "human") {
       <div class="meta-strip">${metaStrip}</div>
       <section class="body-card"><div class="body">${renderMarkdown(issue.body)}</div></section>
       ${childrenHtml}
-      ${editFormHtml(issue)}`;
+      ${editFormHtml(issue)}
+      ${syncRowHtml()}`;
         el.innerHTML = `
       <a class="back-link" href="#/issues">&larr; All issues</a>
       <article class="detail">

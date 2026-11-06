@@ -681,3 +681,9 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 .body-card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; max-width: 100%; }
 .detail .children { margin-top: 1rem; }
 .detail .edit-box { margin-top: 1rem; }
+
+/* #251: visible per-operation explanations + sync row outside the edit form */
+.proposal-explain { display: flex; flex-direction: column; gap: 0.15rem; margin: 0.4rem 0 0; font-size: 0.8rem; color: var(--muted); }
+.sync-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; margin-top: 0.75rem; }
+.sync-caption { margin: 0; font-size: 0.85rem; color: var(--muted); flex: 1 1 16rem; }
+.sync-row .edit-result { flex-basis: 100%; margin: 0; }

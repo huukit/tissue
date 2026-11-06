@@ -1197,3 +1197,36 @@ fn settings_page_one_setting_per_row_245() {
         assert!(css.contains(needle), "style.css ships {needle}");
     }
 }
+
+/// #251: Sync / Approve / Reject are self-explanatory — each operation has a
+/// visible plain-language explanation (not only a tooltip), the Sync button
+/// sits outside the collapsed edit form with a caption, and the review queue
+/// header states what the queue means.
+#[test]
+fn operations_are_self_explanatory_251() {
+    let repo = Scratch::new("wording-251");
+    let server = start_server(&repo);
+    let (status, js) = get(&server.addr, "/app.js");
+    assert!(status.contains("200"), "app.js: {status}");
+    // proposal cards: visible explanations for both actions
+    assert!(
+        js.contains("apply this proposed change to") && js.contains("stays unchanged"),
+        "approve/reject explanations: {js}"
+    );
+    // sync moved out of the edit form, with a visible caption
+    assert!(js.contains("sync-caption"), "sync caption: {js}");
+    assert!(
+        js.contains("exact field-level diff the agent will reconcile from"),
+        "sync caption text: {js}"
+    );
+    // review queue header states the queue's meaning
+    assert!(
+        js.contains("nothing changes in the") && js.contains("until you approve"),
+        "queue header meaning: {js}"
+    );
+    let (status, css) = get(&server.addr, "/style.css");
+    assert!(
+        status.contains("200") && css.contains(".proposal-explain") && css.contains(".sync-row"),
+        "css: {css}"
+    );
+}
