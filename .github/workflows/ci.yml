@@ -97,8 +97,25 @@ jobs:
           python3 tools/tests/test_dev_fixture_demo.py
           python3 tools/tests/test_deploy_install.py
 
-  rust:
-    name: fmt / check / clippy / test / audit / gui tsc
+  fmt:
+    name: fmt (cargo fmt --check) (#235)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+  clippy:
+    name: check + clippy (#235)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     defaults:
@@ -109,23 +126,48 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src
 
-      - name: cargo fmt --check
-        run: cargo fmt --all --check
-
-      - name: cargo check
+      - name: cargo check (compile gate)
         run: cargo check --workspace --all-targets --locked
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+  test:
+    name: test (cargo test --locked) (#235)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+
       - name: cargo test
         run: cargo test --workspace --locked
+
+  audit:
+    name: audit (cargo audit) (#235)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-audit
         uses: taiki-e/install-action@v2
@@ -134,6 +176,13 @@ jobs:
 
       - name: cargo audit
         run: cargo audit
+
+  gui-tsc:
+    name: gui tsc sync check (#235)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-node@v5
         with:
