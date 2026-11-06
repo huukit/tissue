@@ -42,6 +42,8 @@ def main() -> None:
     check("127.0.0.1:7323" in text, "verifies loopback binding")
     check("--from-github" in text, "supports --from-github OWNER/REPO init")
     check('sudo -u "$SERVICE_USER"' in text, "repo init runs as the service user, never root")
+    check(text.index("no binary in $BIN_DIR") < text.index("tissue init --dir"),
+          "binary is installed BEFORE repo init (init needs the binary; box hit this)")
 
     # defaults must match the literal ExecStart paths in the unit (#129)
     check('TISSUE_REPO_DIR:-/srv/tissue-issues' in text and "--repo /srv/tissue-issues" in UNIT,

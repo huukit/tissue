@@ -66,23 +66,11 @@ install -m 0644 "$SRC_DIR/tissue.service" "$SRC_DIR/tissue-upgrade.service" "$SR
 install -m 0755 "$SRC_DIR/tissue-upgrade.sh" "$LIB_DIR/tissue-upgrade.sh"
 log "installed units to $UNIT_DIR and $LIB_DIR/tissue-upgrade.sh"
 
-# --- 4. issue repo: init only if empty (as the service user, never root) -----
-if [ -z "$(ls -A "$REPO_DIR" 2>/dev/null)" ]; then
-  if [ -n "$FROM_GITHUB" ]; then
-    log "tissue init --from-github $FROM_GITHUB --dir $REPO_DIR (as $SERVICE_USER)"
-    sudo -u "$SERVICE_USER" -- env PATH="$BIN_DIR:/usr/local/bin:/usr/bin:/bin" \
-      "$BIN_DIR/tissue" init --from-github "$FROM_GITHUB" --dir "$REPO_DIR"
-  else
-    log "tissue init --dir $REPO_DIR (as $SERVICE_USER)"
-    sudo -u "$SERVICE_USER" -- env PATH="$BIN_DIR:/usr/local/bin:/usr/bin:/bin" \
-      "$BIN_DIR/tissue" init --dir "$REPO_DIR"
-  fi
+# --- 4. binary FIRST (repo init below needs it): install latest published
+#        release only if missing ---------------------------------------------
+if [ -x "$BIN_DIR/tissue" ]; then
+  log "binary present at $BIN_DIR/tissue — keeping it (upgrade timer manages it)"
 else
-  log "$REPO_DIR already initialized — skipping init"
-fi
-
-# --- 5. binary: install latest published release only if missing -------------
-if [ ! -x "$BIN_DIR/tissue" ]; then
   log "no binary in $BIN_DIR — downloading latest published release"
   asset="$(curl -fsSL "https://api.github.com/repos/huukit/tissue/releases/latest" \
     | grep -m1 '"name": "tissue-v.*x86_64-unknown-linux-musl.tar.gz"$' \
@@ -100,8 +88,31 @@ if [ ! -x "$BIN_DIR/tissue" ]; then
   rm -f "/tmp/$asset" "/tmp/$asset.sha256" /tmp/tissue
   rm -rf /tmp/share
   log "binary installed to $BIN_DIR/tissue"
+fi
+# fall back to a system-installed tissue (e.g. old /usr/local/bin install) if
+# the download was skipped or the unit path differs
+TISSUE_BIN="$BIN_DIR/tissue"
+if [ ! -x "$TISSUE_BIN" ]; then
+  TISSUE_BIN="$(command -v tissue || true)"
+fi
+if [ -z "$TISSUE_BIN" ] || [ ! -x "$TISSUE_BIN" ]; then
+  echo "error: no tissue binary in $BIN_DIR and none on PATH — cannot init the repo" >&2
+  exit 1
+fi
+
+# --- 5. issue repo: init only if empty (as the service user, never root) -----
+if [ -z "$(ls -A "$REPO_DIR" 2>/dev/null)" ]; then
+  if [ -n "$FROM_GITHUB" ]; then
+    log "tissue init --from-github $FROM_GITHUB --dir $REPO_DIR (as $SERVICE_USER)"
+    sudo -u "$SERVICE_USER" -- env PATH="$BIN_DIR:/usr/local/bin:/usr/bin:/bin" \
+      "$TISSUE_BIN" init --from-github "$FROM_GITHUB" --dir "$REPO_DIR"
+  else
+    log "tissue init --dir $REPO_DIR (as $SERVICE_USER)"
+    sudo -u "$SERVICE_USER" -- env PATH="$BIN_DIR:/usr/local/bin:/usr/bin:/bin" \
+      "$TISSUE_BIN" init --dir "$REPO_DIR"
+  fi
 else
-  log "binary present at $BIN_DIR/tissue — keeping it (upgrade timer manages it)"
+  log "$REPO_DIR already initialized — skipping init"
 fi
 
 # --- 6. let the upgrade user control the viewer service (#132) ---------------
