@@ -38,6 +38,11 @@ def main() -> None:
     check("dev_fixtures: true" in text, "inserts the #171 dev_fixtures opt-in guard")
     check(re.search(r"id -u.*=.*0", text) is not None, "drops privileges when run as root")
     check("SERVICE_USER=tissue" in text, "re-execs as the unprivileged tissue user")
+    check('chown "$SERVICE_USER:$SERVICE_USER" "$DIR"' in text,
+          "creates the target dir while root and chowns it (parents like /srv are root-owned)")
+    check("deploy/install.sh first" in text, "fails with a clear hint when the tissue user is missing (#132)")
+    check(text.index("refusing: $DIR exists") < text.index('mkdir -p "$DIR"'),
+          "non-empty-dir refusal happens before any mkdir")
     check("exists and is not empty" in text, "refuses a non-empty target dir")
     check('DIR="${1:-/srv/tissue-test}"' in text, "default target dir is the throwaway /srv/tissue-test")
     check(re.search(r"^\s*DIR=.*tissue-issues\b", text, re.M) is None,

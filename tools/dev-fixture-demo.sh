@@ -22,17 +22,27 @@ if [ -z "$TISSUE" ]; then
   exit 1
 fi
 
-# Drop privileges: run everything as the service user, never root.
-if [ "$(id -u)" = "0" ]; then
-  exec sudo -u "$SERVICE_USER" -- env "TISSUE_BIN=$TISSUE" \
-    PATH="$(dirname "$TISSUE"):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-    bash "$0" "$@"
+if ! id "$SERVICE_USER" >/dev/null 2>&1; then
+  echo "error: no '$SERVICE_USER' user on this box — run deploy/install.sh first (#132)" >&2
+  exit 1
 fi
 
+# Refuse a non-empty target before touching anything.
 if [ -e "$DIR" ] && [ -n "$(ls -A "$DIR" 2>/dev/null)" ]; then
   echo "refusing: $DIR exists and is not empty." >&2
   echo "  if it is a disposable test repo: rm -rf '$DIR' and re-run" >&2
   exit 1
+fi
+
+# Drop privileges: run everything as the service user, never root. The target
+# dir is created while still root (parents like /srv are root-owned) and
+# handed over to the service user.
+if [ "$(id -u)" = "0" ]; then
+  mkdir -p "$DIR"
+  chown "$SERVICE_USER:$SERVICE_USER" "$DIR"
+  exec sudo -u "$SERVICE_USER" -- env "TISSUE_BIN=$TISSUE" \
+    PATH="$(dirname "$TISSUE"):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    bash "$0" "$@"
 fi
 
 mkdir -p "$DIR"
