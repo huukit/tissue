@@ -45,6 +45,7 @@ Owner ruling 2026-11-05: v0.1.7 runs; the next release must carry the pending fi
 - **#249** bug: draft issue detail (`agent-created-pending`, e.g. IAM-12) returns invalid JSON — missing closing brace in `api_issue_detail` draft branch (serve.rs ~1545) → GUI JSON.parse error
 - **#250** format: `summary` as a separate optional front-matter field from `title` (decision 17) — spec, core, CLI, API, GUI list/detail/edit; both editable with Save (#244)
 - **#251** GUI: Sync / Approve / Reject must be self-explanatory — visible per-operation explanations on proposal cards, the sync button, and the review-queue header
+- **#252** human-side history: `GET /api/issues/<id>/history` + collapsible History section on the Human tab (issue.md's git log)
 - **#246/#247** `tools/dev-fixture-demo.sh` one-shot fixture repo (branch `vibe/dev-fixture-demo-246`, box-hardened: root-side mkdir+chown, prod-path hard-refusal)
 - **#132/#248** `deploy/install.sh` one-command box setup / migration off root (branch `vibe/deploy-install-132`, box-hardened: binary before init, no curl|grep -m1 EPIPE, /usr/local/bin symlink)
 - Gate: Tester PASS → merge → bump 0.1.9 → tag → owner re-review on the box
