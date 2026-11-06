@@ -240,6 +240,18 @@ fn remote_agent_loop_end_to_end() {
     assert!(body.contains("IAM-9"), "draft listed: {body}");
     assert!(body.contains("needs-review"), "flag visible: {body}");
 
+    // #249: the draft's DETAIL endpoint must return valid JSON (the review
+    // queue links there) — parse it, don't just substring-match.
+    let (status, body) = get(addr, "/api/issues/IAM-9");
+    assert!(status.contains("200"), "draft detail status: {status}");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&body).expect("draft detail is valid JSON (#249)");
+    assert_eq!(parsed["issue"]["id"], "IAM-9", "draft detail id: {body}");
+    assert_eq!(
+        parsed["issue"]["title"], "From the API",
+        "draft detail title: {body}"
+    );
+
     // the human approves the creation: issue.md materializes, tag clears
     let out = repo.tissue(&["approve", "IAM-9", "prop-01"]);
     assert!(out.status.success(), "approve create failed: {out:?}");

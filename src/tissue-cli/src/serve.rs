@@ -1545,7 +1545,10 @@ fn api_issue_detail(stream: &mut TcpStream, repo: &Path, id: &str) -> Result<(),
         if let Some(draft) = creation_draft_summary(repo, &issues_dir(repo).join(id)) {
             let mut summary = issue_summary_json(&draft);
             summary.pop();
-            let body = "{\"issue\":".to_string() + &summary + ",\"revision\":0,\"body\":\"\"}";
+            // #249: the summary's closing brace was popped, so the body needs
+            // two closing braces — one for the issue object, one for the
+            // outer {"issue": ...} envelope.
+            let body = "{\"issue\":".to_string() + &summary + ",\"revision\":0,\"body\":\"\"}}";
             return respond_json(stream, 200, &body);
         }
         return respond_json(
