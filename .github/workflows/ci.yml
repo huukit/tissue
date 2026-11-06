@@ -84,7 +84,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
-      - name: py_compile + tests for tools/import_github_issues.py
+      - name: py_compile + tests for tools/ scripts (#233, #246)
         run: |
           # The real-import test commits into a temp repo and the import tool
           # reads `git config user.name/email`; runners have no identity.
@@ -92,6 +92,8 @@ jobs:
           git config --global user.email ci@localhost
           python3 -m py_compile tools/import_github_issues.py
           python3 tools/tests/test_import_github_issues.py
+          bash -n tools/dev-fixture-demo.sh
+          python3 tools/tests/test_dev_fixture_demo.py
 
   rust:
     name: fmt / check / clippy / test / audit / gui tsc
