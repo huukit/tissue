@@ -271,6 +271,57 @@ jobs:
           path: src/target/x86_64-unknown-linux-musl/release/tissue
           if-no-files-found: error
 
+  pr-smoke:
+    name: PR smoke (debug build + CLI round trip + standalone serve) (#236)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+
+      - name: Build debug binary
+        working-directory: src
+        run: cargo build -p tissue-cli --locked
+
+      - name: Smoke test on the debug binary (musl static check stays push-only)
+        run: |
+          set -eu
+          bin="$PWD/src/target/debug/tissue"
+          "$bin" --version
+          "$bin" --help | grep -q "tissue"
+          scratch="$(mktemp -d)"
+          cd "$scratch"
+          git init --quiet
+          git config user.email smoke@tissue.test
+          git config user.name smoke
+          "$bin" init
+          "$bin" create IAM-1 "smoke" --body "round trip"
+          "$bin" list | grep -q "IAM-1"
+          "$bin" show IAM-1 | grep -q "round trip"
+          # Standalone path: binary outside any source tree must serve the GUI
+          # and API from embedded assets (same guard as the push-only smoke).
+          cp "$bin" ./tissue-standalone
+          ./tissue-standalone serve --port 7399 &
+          srv=$!
+          trap 'kill $srv 2>/dev/null || true' EXIT
+          for _ in $(seq 1 50); do
+            if python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7399/', timeout=2)" 2>/dev/null; then break; fi
+            sleep 0.2
+          done
+          html="$(python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:7399/').read().decode())")"
+          case "$html" in
+            *"<html"*|*"<!DOCTYPE"*) echo "standalone serve: GUI served" ;;
+            *) echo "::error::standalone serve did not return the GUI"; exit 1 ;;
+          esac
+          api="$(python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:7399/api/issues').read().decode())")"
+          case "$api" in *"IAM-1"*) echo "standalone serve: API live" ;; *) echo "::error::standalone API missing IAM-1"; exit 1 ;; esac
+
   linear-history:
     name: linear history (no merge commits)
     runs-on: ubuntu-24.04
@@ -365,3 +416,29 @@ jobs:
           name: tissue-poc-container-image
           path: /tmp/tissue-poc-image.tar
           retention-days: 14
+
+  container-build:
+    name: container build + image contents (PR) (#236)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the tissue image
+        run: docker build -f Dockerfile -t tissue:poc .
+      - name: Verify final image contains only the tissue binary
+        run: |
+          set -eu
+          docker save tissue:poc -o /tmp/img.tar
+          rm -rf /tmp/img && mkdir -p /tmp/img && tar -xf /tmp/img.tar -C /tmp/img
+          find /tmp/img -name layer.tar -print0 |
+            while IFS= read -r -d '' layer; do
+              tar -tvf "$layer" | awk '{print $NF}'
+            done | sed 's|^\./||' | sort -u > /tmp/entries.txt
+          bad="$(grep -v -e '^tissue$' -e '^/$' -e '^$' /tmp/entries.txt || true)"
+          if [ -n "$bad" ]; then
+            echo "::error::Unexpected files in final image:"
+            echo "$bad"
+            exit 1
+          fi
+          echo "OK: final image contains only the tissue binary"
