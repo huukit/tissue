@@ -1155,3 +1155,45 @@ fn detail_view_hierarchy_244() {
         assert!(css.contains(needle), "style.css ships {needle}");
     }
 }
+
+/// #245: the Settings page renders one setting per line — every setting row
+/// is a `.settings-row` grid (label column + control), buttons/results on
+/// their own rows at the end of their section, and the whitelisted config
+/// dump is a collapsed <details>. All ids unchanged.
+#[test]
+fn settings_page_one_setting_per_row_245() {
+    let repo = Scratch::new("settings-245");
+    let server = start_server(&repo);
+    let (status, js) = get(&server.addr, "/app.js");
+    assert!(status.contains("200"), "app.js: {status}");
+    for needle in ["settings-row", "settings-actions", "settings-config-dump"] {
+        assert!(js.contains(needle), "app.js ships {needle}");
+    }
+    // every settings input/select now sits in a row with a label[for]
+    for id in [
+        "cfg-agent-mode",
+        "cfg-agent-command",
+        "cfg-agent-endpoint",
+        "cfg-remote",
+        "token-label",
+    ] {
+        assert!(
+            js.contains(&format!("for=\"{id}\"")),
+            "label[for={id}] in row: {js}"
+        );
+    }
+    // config dump collapsed in a details at the bottom of the agent section
+    assert!(
+        js.contains("Current config (whitelisted)") && js.contains("id=\"cfg-view\""),
+        "config dump kept, collapsed: {js}"
+    );
+    let (status, css) = get(&server.addr, "/style.css");
+    assert!(status.contains("200"), "style.css: {status}");
+    for needle in [
+        ".settings-row",
+        ".settings-actions",
+        "grid-template-columns",
+    ] {
+        assert!(css.contains(needle), "style.css ships {needle}");
+    }
+}

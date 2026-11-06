@@ -391,13 +391,25 @@ body {
   margin-bottom: 1.25rem;
 }
 .settings-section > h2 { margin: 0 0 0.75rem; font-size: 1.05rem; }
-.settings-section label {
-  display: flex;
-  flex-direction: column;
-  font-size: 0.85rem;
-  color: var(--muted);
-  gap: 0.25rem;
-  margin-bottom: 0.7rem;
+/* #245: one setting per line — a two-column row grid (fixed label column
+   left, control right) instead of stacked label-over-full-width blocks.
+   Collapses to a single column on narrow screens (#239). */
+.settings-row {
+  display: grid;
+  grid-template-columns: minmax(10rem, 12rem) 1fr;
+  gap: 0.25rem 0.75rem;
+  align-items: center;
+  margin-bottom: 0.6rem;
+}
+.settings-row > label { font-size: 0.85rem; color: var(--muted); }
+/* Buttons and result lines sit on their own rows at the end of a section. */
+.settings-actions { margin-top: 0.9rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.settings-actions-row { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; }
+.settings-actions-row .edit-result { margin: 0; }
+.settings-config-dump { margin-top: 0.9rem; font-size: 0.85rem; color: var(--muted); }
+.settings-config-dump pre { margin-top: 0.4rem; }
+@media (max-width: 480px) {
+  .settings-row { grid-template-columns: 1fr; align-items: start; }
 }
 .settings-section input, .settings-section textarea {
   font: inherit;

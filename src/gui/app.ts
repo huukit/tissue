@@ -1117,50 +1117,67 @@ async function renderSettings(): Promise<void> {
           <code>https://api.mistral.ai</code>) and point <code>endpoint</code> at the
           proxy's <code>http://</code> address.</p>
       </details>
-      <label>Agent mode
+      <div class="settings-row">
+        <label for="cfg-agent-mode">Agent mode</label>
         <select id="cfg-agent-mode" aria-label="Agent mode">
           <option value="none">None (sync stays record-only)</option>
           <option value="command">Local command</option>
           <option value="http">HTTP endpoint</option>
         </select>
-      </label>
+      </div>
       <div id="cfg-mode-command">
-        <label>Agent command
+        <div class="settings-row">
+          <label for="cfg-agent-command">Agent command</label>
           <input id="cfg-agent-command" type="text" placeholder="e.g. claude">
-        </label>
-        <label>Agent args (one per line; <code>{issue}</code> is replaced with the issue id)
+        </div>
+        <div class="settings-row">
+          <label for="cfg-agent-args">Agent args (one per line; <code>{issue}</code> is replaced with the issue id)</label>
           <textarea id="cfg-agent-args" rows="3"></textarea>
-        </label>
+        </div>
       </div>
       <div id="cfg-mode-http" hidden>
-        <label>Endpoint URL
+        <div class="settings-row">
+          <label for="cfg-agent-endpoint">Endpoint URL</label>
           <input id="cfg-agent-endpoint" type="text" placeholder="e.g. http://127.0.0.1:8080/v1/chat/completions">
-        </label>
-        <label>Model
+        </div>
+        <div class="settings-row">
+          <label for="cfg-agent-model">Model</label>
           <input id="cfg-agent-model" type="text" placeholder="e.g. mistral-large-latest">
-        </label>
-        <label>API key reference (<code>api_key_ref</code> — a name, never the key)
+        </div>
+        <div class="settings-row">
+          <label for="cfg-agent-keyref">API key reference (<code>api_key_ref</code> — a name, never the key)</label>
           <input id="cfg-agent-keyref" type="text" placeholder="e.g. mistral  or  env:TISSUE_AGENT_API_KEY">
-        </label>
-        <label>API key (write-only — never stored in config or sent to the API)
+        </div>
+        <div class="settings-row">
+          <label for="cfg-agent-key">API key (write-only — never stored in config or sent to the API)</label>
           <span class="key-field">
             <input id="cfg-agent-key" type="password" autocomplete="off" placeholder="only needed once, to fill secrets.yml">
             <button id="cfg-agent-key-toggle" type="button" class="btn btn-ghost">Show</button>
           </span>
-        </label>
+        </div>
       </div>
-      <label>Agent timeout (seconds)
+      <div class="settings-row">
+        <label for="cfg-agent-timeout">Agent timeout (seconds)</label>
         <input id="cfg-agent-timeout" type="number" min="1" step="1">
-      </label>
-      <label>Remote
+      </div>
+      <div class="settings-row">
+        <label for="cfg-remote">Remote</label>
         <input id="cfg-remote" type="text" placeholder="e.g. /srv/tissue-remote (empty = none)">
-      </label>
-      <button id="agent-test-btn" class="btn" type="button" title="Probe the configured agent (POST /api/agent/test)">Test connection</button>
-      <p id="agent-test-result" class="edit-result" aria-live="polite"></p>
-      <button id="cfg-save" class="btn btn-primary">Save settings</button>
-      <p id="cfg-result" class="edit-result" aria-live="polite"></p>
-      <h3>Current config (whitelisted)</h3>
-      <pre id="cfg-view" class="cfg-view">loading…</pre>
+      </div>
+      <div class="settings-actions">
+        <div class="settings-actions-row">
+          <button id="agent-test-btn" class="btn" type="button" title="Probe the configured agent (POST /api/agent/test)">Test connection</button>
+          <p id="agent-test-result" class="edit-result" aria-live="polite"></p>
+        </div>
+        <div class="settings-actions-row">
+          <button id="cfg-save" class="btn btn-primary">Save settings</button>
+          <p id="cfg-result" class="edit-result" aria-live="polite"></p>
+        </div>
+      </div>
+      <details class="settings-config-dump">
+        <summary>Current config (whitelisted)</summary>
+        <pre id="cfg-view" class="cfg-view">loading…</pre>
+      </details>
     </section>
     <section class="settings-section" id="section-tokens">
       <h2>API tokens</h2>
@@ -1169,18 +1186,23 @@ async function renderSettings(): Promise<void> {
         after issue — copy it then. The list shows id/label/created, never the secret.
         Managing tokens needs the API token itself (the field above).</p>
       <div id="tokens-list" class="tokens-list">loading…</div>
-      <label>New token label
+      <div class="settings-row">
+        <label for="token-label">New token label</label>
         <input id="token-label" type="text" placeholder="e.g. human:tuomas or agent:dev-1" aria-label="New token label">
-      </label>
-      <button id="token-issue" class="btn">Issue token</button>
-      <div id="token-once" class="token-once" hidden>
-        <p>New token — shown once, never again:</p>
-        <span class="key-field">
-          <input id="token-secret" type="text" readonly aria-label="New token value (shown once)">
-          <button id="token-copy" type="button" class="btn btn-ghost">Copy</button>
-        </span>
       </div>
-      <p id="token-result" class="edit-result" aria-live="polite"></p>
+      <div class="settings-actions">
+        <div class="settings-actions-row">
+          <button id="token-issue" class="btn">Issue token</button>
+          <p id="token-result" class="edit-result" aria-live="polite"></p>
+        </div>
+        <div id="token-once" class="token-once" hidden>
+          <p>New token — shown once, never again:</p>
+          <span class="key-field">
+            <input id="token-secret" type="text" readonly aria-label="New token value (shown once)">
+            <button id="token-copy" type="button" class="btn btn-ghost">Copy</button>
+          </span>
+        </div>
+      </div>
     </section>
     <section class="settings-section" id="section-about">
       <h2>About</h2>
