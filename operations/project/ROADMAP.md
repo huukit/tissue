@@ -38,7 +38,13 @@ Owner ruling 2026-11-05: v0.1.7 runs; the next release must carry the pending fi
 - **#238** repo rules + role skill files (poll mode §8, sandbox hygiene §9) — PO commits `234ee3a`/`232f318`
 - Tagged **v0.1.8**. Next: owner extensive smoke (#140 checklist), then the dioxus trial.
 
-## Now — owner smoke of v0.1.8 (#140 checklist)
+## Now — v0.1.9: owner-reported cosmetics after deploying v0.1.8
+
+- **#244** issue detail view unclear — restructure for at-a-glance reading (badges in header, metadata strip, body primary, edit collapsed)
+- **#245** Settings garbled — one setting group per section, one setting per line (row grid)
+- Gate: Tester PASS → merge → bump 0.1.9 → tag → owner re-review on the box
+
+## Next — owner smoke of v0.1.8 (#140 checklist)
 
 ## Next — v0.1.6-dioxus UI trial (#188)
 
