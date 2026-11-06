@@ -1,0 +1,50 @@
+name: CI audit
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: ci-audit
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: flag open PRs whose head SHA has no completed CI run (#234)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check each open PR head for a completed run
+        run: |
+          set -eu
+          repo="huukit/tissue"
+          coordination=232
+          gh pr list --repo "$repo" --state open \
+            --json number,title,headRefOid --jq '.[]' | while read -r line; do
+            num=$(printf '%s' "$line" | jq -r .number)
+            sha=$(printf '%s' "$line" | jq -r .headRefOid)
+            title=$(printf '%s' "$line" | jq -r .title)
+            completed=$(gh api "repos/$repo/commits/$sha/check-runs?per_page=100" \
+              --jq '[.check_runs[] | select(.status == "completed")] | length')
+            if [ "$completed" -gt 0 ]; then
+              echo "PR #$num @ ${sha:0:7}: $completed completed run(s), ok"
+              continue
+            fi
+            already=$(gh pr view "$num" --repo "$repo" --json comments \
+              --jq --arg sha "$sha" '[.comments[] | select(.body | contains($sha))] | length')
+            if [ "$already" -gt 0 ]; then
+              echo "PR #$num @ ${sha:0:7}: no completed run, already flagged, skipping"
+              continue
+            fi
+            gh pr comment "$num" --repo "$repo" --body "CI audit (#234): no completed Actions run found for head \`$sha\`. Push any commit (e.g. an empty one) or rebase to trigger \`pull_request\` CI; the Tester will verify once a run exists."
+            gh issue comment "$coordination" --repo "$repo" --body "CI audit (#234): PR #$num head \`$sha\` (${sha:0:7}) has no completed CI run — commented on the PR. Title: $title"
+            echo "flagged PR #$num @ ${sha:0:7}"
+          done
