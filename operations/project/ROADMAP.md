@@ -40,8 +40,11 @@ Owner ruling 2026-11-05: v0.1.7 runs; the next release must carry the pending fi
 
 ## Now — v0.1.9: owner-reported cosmetics after deploying v0.1.8
 
-- **#244** issue detail view unclear — restructure for at-a-glance reading (badges in header, metadata strip, body primary, edit collapsed)
+- **#244** issue detail view unclear — restructure for at-a-glance reading; owner follow-ups from the fixture GUI: label the Human (issue.md) / AI (agent.jsonl) split unmistakably, rename "Edit front matter" → "Edit issue", make the title editable with a Save button
 - **#245** Settings garbled — one setting group per section, one setting per line (row grid)
+- **#249** bug: draft issue detail (`agent-created-pending`, e.g. IAM-12) returns invalid JSON — missing closing brace in `api_issue_detail` draft branch (serve.rs ~1545) → GUI JSON.parse error
+- **#246/#247** `tools/dev-fixture-demo.sh` one-shot fixture repo (branch `vibe/dev-fixture-demo-246`, box-hardened: root-side mkdir+chown, prod-path hard-refusal)
+- **#132/#248** `deploy/install.sh` one-command box setup / migration off root (branch `vibe/deploy-install-132`, box-hardened: binary before init, no curl|grep -m1 EPIPE, /usr/local/bin symlink)
 - Gate: Tester PASS → merge → bump 0.1.9 → tag → owner re-review on the box
 
 ## Next — owner smoke of v0.1.8 (#140 checklist)
