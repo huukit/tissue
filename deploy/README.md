@@ -23,6 +23,19 @@ This is the only document you need for one-time setup.
 
 ## One-time setup (on the testing box, as root)
 
+**One command** (idempotent, also migrates boxes set up before the service user
+existed — it creates `tissue`, chowns the existing repo, installs the hardened
+units, and never re-initializes an existing repo):
+
+```sh
+sudo bash deploy/install.sh                     # empty issue repo
+sudo bash deploy/install.sh --from-github OWNER/REPO   # import instead
+```
+
+`install.sh` performs steps 1–8 below (user creation, directories, unit
+install, repo init as `tissue`, binary download, sudoers entry, enable). The
+manual steps stay documented underneath for inspection/troubleshooting.
+
 1. **Create the dedicated user and the directories** (#132). The binary
    lives in `/opt/tissue/bin` so `/usr/local/bin` stays root-owned; the
    issue repo lives in the user's home:

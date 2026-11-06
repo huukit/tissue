@@ -50,11 +50,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: bash -n on deploy scripts
-        run: bash -n deploy/tissue-upgrade.sh
+        run: |
+          for f in deploy/*.sh; do bash -n "$f"; done
       - name: shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          shellcheck deploy/tissue-upgrade.sh
+          shellcheck deploy/*.sh
       - name: systemd unit files verify (#233)
         run: |
           # Stub the absolute ExecStart paths so verify checks unit
@@ -94,6 +95,7 @@ jobs:
           python3 tools/tests/test_import_github_issues.py
           bash -n tools/dev-fixture-demo.sh
           python3 tools/tests/test_dev_fixture_demo.py
+          python3 tools/tests/test_deploy_install.py
 
   rust:
     name: fmt / check / clippy / test / audit / gui tsc
