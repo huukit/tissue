@@ -47,6 +47,8 @@ def main() -> None:
     check('DIR="${1:-/srv/tissue-test}"' in text, "default target dir is the throwaway /srv/tissue-test")
     check(re.search(r"^\s*DIR=.*tissue-issues\b", text, re.M) is None,
           "never assigns the production /srv/tissue-issues as the target dir")
+    check('case "$(cd "$DIR"' in text and "/srv/tissue-issues)" in text,
+          "hard-refuses the production repo path even if it is empty")
     for s in SCENARIOS:
         check(f"--scenario {s}" in text, f"generates scenario {s}")
     check("--seed" in text, "deterministic seeds")

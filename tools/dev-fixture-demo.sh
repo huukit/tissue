@@ -34,6 +34,14 @@ if [ -e "$DIR" ] && [ -n "$(ls -A "$DIR" 2>/dev/null)" ]; then
   exit 1
 fi
 
+# Hard stop: never target the production issue repo, even if it is (momentarily)
+# empty — fixtures must never run against real data.
+case "$(cd "$DIR" 2>/dev/null && pwd -P || echo "$DIR")" in
+  /srv/tissue-issues)
+    echo "refusing: $DIR is the production issue repo — use the default /srv/tissue-test (or another throwaway path)" >&2
+    exit 1 ;;
+esac
+
 # Drop privileges: run everything as the service user, never root. The target
 # dir is created while still root (parents like /srv are root-owned) and
 # handed over to the service user.
