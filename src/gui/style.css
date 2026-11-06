@@ -687,3 +687,10 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 .sync-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; margin-top: 0.75rem; }
 .sync-caption { margin: 0; font-size: 0.85rem; color: var(--muted); flex: 1 1 16rem; }
 .sync-row .edit-result { flex-basis: 100%; margin: 0; }
+/* #252: human-side history — collapsible section on the Human tab */
+.history { margin-top: 1rem; }
+.history-box > summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
+.history-list { list-style: none; margin: 0.5rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.25rem; }
+.history-row { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; align-items: baseline; font-size: 0.85rem; }
+.history-row code { font-family: ui-monospace, monospace; }
+.history-summary { color: var(--muted); }

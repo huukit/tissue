@@ -85,6 +85,14 @@ interface StreamRecord {
   data: { type?: string; [k: string]: unknown };
 }
 
+/** #252: one commit from GET /api/issues/<id>/history (human-side history). */
+interface HistoryEntry {
+  sha: string;
+  ts: string;
+  actor: string;
+  summary: string;
+}
+
 /** #137/#169: whitelisted view of .tissue/config.yml as served by
  * GET /api/config. The agent block never contains key material — only
  * `api_key_ref` (a name); secret-named sub-keys are scrubbed server-side. */
@@ -1836,6 +1844,35 @@ async function renderDetail(id: string, tab: "human" | "ai" = "human"): Promise<
         <h3>Agent stream (${records.length} record${records.length === 1 ? "" : "s"}, collapsed)</h3>
         ${records.length > 0 ? timelineRows : `<p class="placeholder">No agent records yet.</p>`}
       </section>`;
+    // #252: human-side history — the issue's git commits, newest first,
+    // in a collapsible section like the stream. Drafts get valid JSON ([])
+    // from the same endpoint (#249 lesson).
+    let history: HistoryEntry[] = [];
+    try {
+      history = await fetchJson<HistoryEntry[]>(
+        `/api/issues/${encodeURIComponent(id)}/history`
+      );
+    } catch {
+      // unreadable: the section's empty state shows below
+    }
+    const historyHtml = `
+      <section class="history">
+        <details class="history-box">
+          <summary>History (${history.length} commit${history.length === 1 ? "" : "s"}, newest first)</summary>
+          ${
+            history.length > 0
+              ? `<ul class="history-list">${history
+                  .map(
+                    (h) => `<li class="history-row"><code>${esc(h.sha)}</code>
+                        <span class="rec-ts">${esc(h.ts)}</span>
+                        <span class="rec-actor">${esc(h.actor)}</span>
+                        <span class="history-summary">${esc(h.summary)}</span></li>`
+                  )
+                  .join("")}</ul>`
+              : `<p class="placeholder">No history yet.</p>`
+          }
+        </details>
+      </section>`;
     const proposalsHtml = `
       <section class="proposals">
         <h3>Proposals (${proposals.length} pending)</h3>
@@ -1882,7 +1919,8 @@ async function renderDetail(id: string, tab: "human" | "ai" = "human"): Promise<
       <section class="body-card"><div class="body">${renderMarkdown(issue.body)}</div></section>
       ${childrenHtml}
       ${editFormHtml(issue)}
-      ${syncRowHtml()}`;
+      ${syncRowHtml()}
+      ${historyHtml}`;
 
     el.innerHTML = `
       <a class="back-link" href="#/issues">&larr; All issues</a>

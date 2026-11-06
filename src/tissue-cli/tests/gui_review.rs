@@ -1230,3 +1230,83 @@ fn operations_are_self_explanatory_251() {
         "css: {css}"
     );
 }
+
+/// #252: GET /api/issues/<id>/history returns the issue's git commits
+/// (newest first, valid JSON always — drafts included, #249 lesson) and the
+/// Human tab ships a collapsible History section fed by that endpoint.
+#[test]
+fn human_side_history_endpoint_and_gui_252() {
+    let repo = Scratch::new("history-252");
+    let out = repo.tissue(&["create", "IAM-1", "History issue", "--body", "b"]);
+    assert!(out.status.success(), "create: {out:?}");
+    let out = repo.tissue(&[
+        "propose",
+        "IAM-1",
+        "--field",
+        "title",
+        "--current",
+        "History issue",
+        "--proposed",
+        "Renamed",
+        "--actor",
+        "agent:e2e",
+    ]);
+    assert!(out.status.success(), "propose: {out:?}");
+    let server = start_server(&repo);
+    let addr = server.addr;
+
+    let (status, body) = get(&addr, "/api/issues/IAM-1/history");
+    assert!(status.contains("200"), "history: {status} {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).expect("history is valid JSON");
+    let arr = v.as_array().expect("history is an array");
+    assert!(arr.len() >= 2, "create + propose commits: {body}");
+    assert!(
+        body.contains("create IAM-1"),
+        "create commit listed: {body}"
+    );
+    assert!(
+        body.contains("propose IAM-1"),
+        "propose commit listed: {body}"
+    );
+    // newest first
+    assert!(
+        body.find("propose IAM-1").unwrap() < body.find("create IAM-1").unwrap(),
+        "newest first: {body}"
+    );
+
+    // draft issue (agent create): valid JSON array from the same endpoint
+    let out = repo.tissue(&["token", "issue", "--label", "agent:dev-1"]);
+    let agent_secret = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix("token: "))
+        .expect("agent token")
+        .trim()
+        .to_string();
+    let (status, body) = post(
+        &addr,
+        "/api/issues",
+        r#"{"id":"IAM-9","title":"Draft","actor":"human:spoofed"}"#,
+        Some(&agent_secret),
+    );
+    assert!(status.contains("201"), "agent create: {status} {body}");
+    let (status, body) = get(&addr, "/api/issues/IAM-9/history");
+    assert!(status.contains("200"), "draft history: {status} {body}");
+    let v: serde_json::Value =
+        serde_json::from_str(&body).expect("draft history is valid JSON (#249)");
+    assert!(v.as_array().is_some(), "draft history is an array: {body}");
+
+    // invalid id: clean 400/404, no git error, no path traversal
+    let (status, body) = get(&addr, "/api/issues/..%2F..%2Fetc/history");
+    assert!(
+        status.contains("400") || status.contains("404"),
+        "id guarded: {status} {body}"
+    );
+
+    // GUI ships the History section fed by the endpoint
+    let (status, js) = get(&addr, "/app.js");
+    assert!(status.contains("200"));
+    assert!(
+        js.contains("history-box") && js.contains("/history"),
+        "history section in app.js: {js}"
+    );
+}

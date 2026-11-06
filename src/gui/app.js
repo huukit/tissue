@@ -1699,6 +1699,30 @@ async function renderDetail(id, tab = "human") {
         <h3>Agent stream (${records.length} record${records.length === 1 ? "" : "s"}, collapsed)</h3>
         ${records.length > 0 ? timelineRows : `<p class="placeholder">No agent records yet.</p>`}
       </section>`;
+        // #252: human-side history — the issue's git commits, newest first,
+        // in a collapsible section like the stream. Drafts get valid JSON ([])
+        // from the same endpoint (#249 lesson).
+        let history = [];
+        try {
+            history = await fetchJson(`/api/issues/${encodeURIComponent(id)}/history`);
+        }
+        catch (_g) {
+            // unreadable: the section's empty state shows below
+        }
+        const historyHtml = `
+      <section class="history">
+        <details class="history-box">
+          <summary>History (${history.length} commit${history.length === 1 ? "" : "s"}, newest first)</summary>
+          ${history.length > 0
+            ? `<ul class="history-list">${history
+                .map((h) => `<li class="history-row"><code>${esc(h.sha)}</code>
+                        <span class="rec-ts">${esc(h.ts)}</span>
+                        <span class="rec-actor">${esc(h.actor)}</span>
+                        <span class="history-summary">${esc(h.summary)}</span></li>`)
+                .join("")}</ul>`
+            : `<p class="placeholder">No history yet.</p>`}
+        </details>
+      </section>`;
         const proposalsHtml = `
       <section class="proposals">
         <h3>Proposals (${proposals.length} pending)</h3>
@@ -1742,7 +1766,8 @@ async function renderDetail(id, tab = "human") {
       <section class="body-card"><div class="body">${renderMarkdown(issue.body)}</div></section>
       ${childrenHtml}
       ${editFormHtml(issue)}
-      ${syncRowHtml()}`;
+      ${syncRowHtml()}
+      ${historyHtml}`;
         el.innerHTML = `
       <a class="back-link" href="#/issues">&larr; All issues</a>
       <article class="detail">

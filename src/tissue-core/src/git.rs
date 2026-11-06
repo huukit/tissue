@@ -371,6 +371,48 @@ impl Repo {
             .parse::<usize>()
             .map_err(|_| Error::CommandFailed("rev-list --count".into(), out))
     }
+
+    /// Commit log for a repo-root-relative path (e.g. `.tissue/issues/IAM-1`),
+    /// newest first. Empty when the path has no commits (#252 human-side
+    /// history). The caller must validate the path segments (issue ids are
+    /// charset-guarded upstream) — this runs `git log -- <path>` verbatim.
+    pub fn log_path(&self, rel_path: &str) -> Result<Vec<CommitInfo>> {
+        // %x1f (unit separator) keeps fields apart even with odd messages.
+        let out = git(
+            &self.root,
+            &[
+                "log",
+                "--format=%h%x1f%cI%x1f%an <%ae>%x1f%s",
+                "--",
+                rel_path,
+            ],
+        )?;
+        let mut entries = Vec::new();
+        for line in out.lines() {
+            let mut parts = line.splitn(4, '\u{1f}');
+            let (Some(sha), Some(ts), Some(actor), Some(summary)) =
+                (parts.next(), parts.next(), parts.next(), parts.next())
+            else {
+                continue;
+            };
+            entries.push(CommitInfo {
+                sha: sha.to_string(),
+                ts: ts.to_string(),
+                actor: actor.to_string(),
+                summary: summary.to_string(),
+            });
+        }
+        Ok(entries)
+    }
+}
+
+/// One commit as returned by `Repo::log_path` (#252).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CommitInfo {
+    pub sha: String,
+    pub ts: String,
+    pub actor: String,
+    pub summary: String,
 }
 
 #[cfg(test)]

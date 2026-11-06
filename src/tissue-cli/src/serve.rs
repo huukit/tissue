@@ -8,6 +8,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 
+use tissue_core::git;
 use tissue_core::human::{IssueFile, IssueStatus, ReleaseFile};
 use tissue_core::state::Decision;
 
@@ -394,6 +395,8 @@ fn api_route(
             match verb {
                 "proposals" => return api_issue_proposals(stream, repo, id),
                 "records" => return api_issue_records(stream, repo, id),
+                // #252: human-side history (tokenless read like the others).
+                "history" => return api_issue_history(stream, repo, id),
                 _ => {}
             }
         }
@@ -1157,6 +1160,36 @@ fn api_issue_proposals(stream: &mut TcpStream, repo: &Path, id: &str) -> Result<
         }
         Err(e) => respond_json(stream, 404, &format!("{{\"error\":{}}}", json_str(&e))),
     }
+}
+
+/// GET /api/issues/<id>/history (#252): the issue's git commit log for
+/// `.tissue/issues/<id>/`, newest first, tokenless read. Always valid JSON —
+/// drafts (no issue.md yet) get their proposal commit(s) from the same dir
+/// log, or [] (#249 lesson: never emit truncated JSON).
+fn api_issue_history(stream: &mut TcpStream, repo: &Path, id: &str) -> Result<(), String> {
+    // Charset-guard the id: it becomes a git path argument below.
+    if !tissue_core::human::valid_issue_id(id) {
+        return respond_json(
+            stream,
+            400,
+            &format!("{{\"error\":\"invalid issue id: {}\"}}", json_str(id)),
+        );
+    }
+    let dir = issues_dir(repo).join(id);
+    if !dir.is_dir() {
+        return respond_json(
+            stream,
+            404,
+            &format!("{{\"error\":\"issue not found: {}\"}}", json_str(id)),
+        );
+    }
+    let rel = format!(".tissue/issues/{id}");
+    let entries = git::Repo::open(repo)
+        .ok()
+        .and_then(|g| g.log_path(&rel).ok())
+        .unwrap_or_default();
+    let body = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
+    respond_json(stream, 200, &body)
 }
 
 /// GET /api/issues/<id>/records: the agent stream for the timeline view.
