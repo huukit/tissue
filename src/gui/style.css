@@ -657,3 +657,15 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 }
 .detail-summary { color: var(--muted); margin: 0.25rem 0 0.5rem; white-space: pre-wrap; }
 .edit-fields textarea { width: 100%; font: inherit; }
+
+/* #244: detail-view hierarchy — badges inline in the header, compact metadata
+   strip, body as a bounded primary card; all flex-wrap so it degrades toward
+   the #239 mobile pass (no fixed pixel widths). */
+.detail-title { margin-bottom: 0.25rem; }
+.detail-badges { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
+.meta-strip { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; color: var(--muted); font-size: 0.85rem; margin-bottom: 0.75rem; }
+.meta-item { white-space: nowrap; }
+.meta-k { opacity: 0.75; margin-right: 0.25rem; }
+.body-card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; max-width: 100%; }
+.detail .children { margin-top: 1rem; }
+.detail .edit-box { margin-top: 1rem; }

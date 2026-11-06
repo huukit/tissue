@@ -1127,3 +1127,31 @@ fn search_cli_and_api_agree_212() {
     );
     assert!(js.contains("filter-type"), "type dropdown ships: app.js");
 }
+
+/// #244: the issue detail view is restructured for at-a-glance reading —
+/// type/status/project badges inline in the header, the remaining
+/// front-matter fields as a compact meta strip, the body in a bounded card,
+/// the edit form a collapsed <details> block; styles ship and stay
+/// flex-wrap (mobile-degradable, #239).
+#[test]
+fn detail_view_hierarchy_244() {
+    let repo = Scratch::new("detail-244");
+    let out = repo.tissue(&["create", "IAM-1", "Restructured", "--body", "hello"]);
+    assert!(out.status.success(), "create: {out:?}");
+    let server = start_server(&repo);
+    let (status, js) = get(&server.addr, "/app.js");
+    assert!(status.contains("200"), "app.js: {status}");
+    for needle in ["detail-badges", "meta-strip", "meta-item", "body-card"] {
+        assert!(js.contains(needle), "app.js ships {needle}");
+    }
+    // edit form stays collapsed under an "Edit" summary, after the body card
+    assert!(
+        js.contains("<summary>Edit</summary>"),
+        "collapsed edit: {js}"
+    );
+    let (status, css) = get(&server.addr, "/style.css");
+    assert!(status.contains("200"), "style.css: {status}");
+    for needle in [".detail-badges", ".meta-strip", ".body-card"] {
+        assert!(css.contains(needle), "style.css ships {needle}");
+    }
+}

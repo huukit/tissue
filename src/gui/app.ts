@@ -1532,7 +1532,7 @@ function renderMarkdown(src: string): string {
 function editFormHtml(issue: IssueDetail): string {
   return `
     <details class="edit-box">
-      <summary>Edit front matter</summary>
+      <summary>Edit</summary>
       <div class="edit-fields">
         <label>Title
           <input id="edit-title" type="text" value="${esc(issue.title)}">
@@ -1708,24 +1708,23 @@ async function renderDetail(id: string, tab: "human" | "ai" = "human"): Promise<
       `/api/issues/${encodeURIComponent(id)}`
     );
     const issue = data.issue;
-    const fm = [
-      ["id", esc(issue.id)],
-      ["project", `<span class="badge project-badge">${esc(projectOf(issue.id))}</span> <span class="hint">(immutable — the id prefix is the identity, #172)</span>`],
-      ["type", typeBadgeHtml(issue)],
-      ["status", `<span class="status ${statusClass(issue.status)}">${esc(issue.status)}</span>`],
+    // #244: the header carries id/title with type/status/project badges
+    // inline; the remaining front-matter fields render as a compact
+    // metadata strip under the header (not a 10-row dl).
+    const metaStrip = [
       [
         "parent",
         issue.parent
           ? `<a class="issue-link" href="#/issue/${encodeURIComponent(issue.parent)}">${esc(issue.parent)}</a>`
           : "—",
       ],
-      ["last touch", lastTouchBadge(issue)],
       ["release", esc(issue.release ?? "—")],
       ["tags", issue.tags.length ? esc(issue.tags.join(", ")) : "—"],
+      ["last touch", lastTouchBadge(issue)],
       ["created", esc(issue.created)],
       ["updated", esc(issue.updated)],
     ]
-      .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
+      .map(([k, v]) => `<span class="meta-item"><span class="meta-k">${k}</span>${v}</span>`)
       .join("");
 
     // #211: a feature lists its child tasks/bugs (derived from `parent`).
@@ -1824,16 +1823,25 @@ async function renderDetail(id: string, tab: "human" | "ai" = "human"): Promise<
       </dl>
       ${proposalsHtml}
       ${timeline}`;
+    // #244: body is the primary content in a bounded card directly under the
+    // metadata strip; children get their own section; the edit form stays a
+    // collapsed secondary <details> block below the body.
     const humanPane = `
-      <dl class="front-matter">${fm}</dl>
+      <div class="meta-strip">${metaStrip}</div>
+      <section class="body-card"><div class="body">${renderMarkdown(issue.body)}</div></section>
       ${childrenHtml}
-      ${editFormHtml(issue)}
-      <div class="body">${renderMarkdown(issue.body)}</div>`;
+      ${editFormHtml(issue)}`;
 
     el.innerHTML = `
       <a class="back-link" href="#/issues">&larr; All issues</a>
       <article class="detail">
-        <h2>${esc(issue.id)} — ${esc(issue.title)} ${badgeHtml(issue.tags)}</h2>
+        <h2 class="detail-title">${esc(issue.id)} — ${esc(issue.title)}</h2>
+        <div class="detail-badges">
+          ${typeBadgeHtml(issue)}
+          <span class="status ${statusClass(issue.status)}">${esc(issue.status)}</span>
+          <span class="badge project-badge" title="project (id prefix)">${esc(projectOf(issue.id))}</span>
+          ${badgeHtml(issue.tags)}
+        </div>
         ${issue.summary ? `<p class="detail-summary">${esc(issue.summary)}</p>` : ""}
         ${tokenBarHtml()}
         <div class="tabs" role="tablist">
