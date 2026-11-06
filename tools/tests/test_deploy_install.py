@@ -44,6 +44,10 @@ def main() -> None:
     check('sudo -u "$SERVICE_USER"' in text, "repo init runs as the service user, never root")
     check(text.index("no binary in $BIN_DIR") < text.index("tissue init --dir"),
           "binary is installed BEFORE repo init (init needs the binary; box hit this)")
+    check(re.search(r'curl -fsSL "https://api\.github\.com/repos/[^"]*releases/latest" -o ', text) is not None,
+          "release JSON is fetched to a file before grep (no curl|grep -m1 EPIPE under pipefail, #130)")
+    check(re.search(r"curl[^|]*\|\s*grep -m1", text) is None,
+          "no curl|grep -m1 pipeline anywhere in the script")
 
     # defaults must match the literal ExecStart paths in the unit (#129)
     check('TISSUE_REPO_DIR:-/srv/tissue-issues' in text and "--repo /srv/tissue-issues" in UNIT,

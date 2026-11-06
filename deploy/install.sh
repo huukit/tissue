@@ -72,9 +72,18 @@ if [ -x "$BIN_DIR/tissue" ]; then
   log "binary present at $BIN_DIR/tissue — keeping it (upgrade timer manages it)"
 else
   log "no binary in $BIN_DIR — downloading latest published release"
-  asset="$(curl -fsSL "https://api.github.com/repos/huukit/tissue/releases/latest" \
-    | grep -m1 '"name": "tissue-v.*x86_64-unknown-linux-musl.tar.gz"$' \
+  # Fetch the release JSON to a file first: piping curl into `grep -m1` makes
+  # grep exit after the first match, curl then gets EPIPE and set -o pipefail
+  # kills the script (the #130 bug — same pattern tissue-upgrade.sh avoids).
+  rel_json="$(mktemp)"
+  curl -fsSL "https://api.github.com/repos/huukit/tissue/releases/latest" -o "$rel_json"
+  asset="$(grep -m1 '"name": "tissue-v.*x86_64-unknown-linux-musl.tar.gz"$' "$rel_json" \
     | sed -E 's/.*"name": "([^"]+)".*/\1/')"
+  rm -f "$rel_json"
+  if [ -z "$asset" ]; then
+    echo "error: no tissue-v*-x86_64-unknown-linux-musl.tar.gz asset on the latest release" >&2
+    exit 1
+  fi
   curl -fsSL -o "/tmp/$asset" "https://github.com/huukit/tissue/releases/latest/download/$asset"
   curl -fsSL -o "/tmp/$asset.sha256" "https://github.com/huukit/tissue/releases/latest/download/$asset.sha256"
   (cd /tmp && sha256sum -c "$asset.sha256")
